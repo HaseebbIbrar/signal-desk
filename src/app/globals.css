@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+/* SwooScale palette: black → deep purple gradient, pink accent, dark purple cards. */
+@theme {
+  --color-brand: #522c83;
+  --color-pink: #e337ad;
+  --color-pink-soft: #f07bcb;
+  --color-night: #0d0717;
+  --color-card: #24143b;
+  --color-card-2: #2d1849;
+  --color-card-3: #371d58;
+  --color-line: #4a2a73;
+  --color-ok: #3ddc97;
+  --color-warn: #ffc857;
+  --color-bad: #ff6b81;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  background-color: var(--color-night);
+  background-image: linear-gradient(180deg, #000000 0%, #1a0d2e 35%, #2a1648 100%);
+  background-attachment: fixed;
+  color: #ffffff;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-pink);
+  outline-offset: 2px;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--color-pink);
+}
+
+details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+@keyframes sd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.sd-spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 9999px;
+  border: 2px solid rgb(255 255 255 / 0.25);
+  border-top-color: var(--color-pink);
+  animation: sd-spin 0.8s linear infinite;
+}
