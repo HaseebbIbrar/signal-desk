@@ -176,17 +176,19 @@ Tests cover the date-serial conversion, Job URL normalisation, finding the lates
 
 ## Test on a new server in mock mode
 
+For a beginner-friendly, step-by-step SiteGround walkthrough, see **[DEPLOY-SITEGROUND.md](DEPLOY-SITEGROUND.md)**.
+
 Mock mode runs the full app (login, ticking, decision makers) on **fake in-memory data**. It needs no Microsoft or SharePoint access, so it's safe for a hosting provider to test. The data resets every time the app restarts. Mock mode is refused when `APP_ENV=production`.
 
 **Requirements:** Node.js **22 or 24 LTS** (the minimum is 20.9).
 
 **Build and start:**
 ```bash
-npm ci --include=dev   # dev dependencies are needed for the build (Tailwind, TypeScript)
+npm ci                 # works with NODE_ENV=production too: build tools are regular dependencies
 npm run build
 PORT=3000 npm start    # or let the host set PORT; the app listens on whatever PORT says
 ```
-On a managed Node.js host (for example SiteGround Site Tools), use these settings: install `npm ci --include=dev`, build `npm run build`, start `npm start`, framework Next.js, output `.next`.
+On a managed Node.js host (for example SiteGround Site Tools), use these settings: install `npm ci`, build `npm run build`, start `npm start`, framework Next.js, output `.next`.
 
 **Environment variables for mock mode only** (the values below are dummies, so replace them):
 ```bash
