@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Cell, SIGNALS_SHEET, VERIFY_SHEET } from "@/lib/constants";
 import { DecisionMakerPresentError, ForbiddenWriteError, SheetBusyError } from "@/lib/errors";
 import { isoToSerial } from "@/lib/excel-date";
@@ -7,6 +7,11 @@ import { GraphBackend } from "@/lib/workbook/graph";
 import { header, separator, setup, sheetAQ, signal } from "./helpers";
 
 const D = "2026-10-06";
+
+// These tests use the original 17-column verify tab (no R1 "Role Sub-Group"), so ticks append A:Q
+// and log a warning by design (covered in sub-group.test.ts). Keep the test output quiet.
+beforeEach(() => void vi.spyOn(console, "warn").mockImplementation(() => {}));
+afterEach(() => vi.restoreAllMocks());
 
 function baseSheets() {
   const signals: Cell[][] = [
@@ -34,12 +39,14 @@ describe("refusing to write to Signals", () => {
     expect(() => assertWriteAllowed("signals to verify decision make", "A2")).toThrow(ForbiddenWriteError); // exact name only
   });
 
-  it("the guard limits verify-tab writes to one data row inside A:Q", () => {
+  it("the guard limits verify-tab writes to one data row inside A:R", () => {
     expect(() => assertWriteAllowed(VERIFY_SHEET, "A2:Q2")).not.toThrow();
+    expect(() => assertWriteAllowed(VERIFY_SHEET, "A2:R2")).not.toThrow(); // R = Role Sub-Group
     expect(() => assertWriteAllowed(VERIFY_SHEET, "M160")).not.toThrow();
     expect(() => assertWriteAllowed(VERIFY_SHEET, "A1:Q1")).toThrow(ForbiddenWriteError); // header
-    expect(() => assertWriteAllowed(VERIFY_SHEET, "A2:R2")).toThrow(ForbiddenWriteError); // past Q
-    expect(() => assertWriteAllowed(VERIFY_SHEET, "R5")).toThrow(ForbiddenWriteError);
+    expect(() => assertWriteAllowed(VERIFY_SHEET, "R1")).toThrow(ForbiddenWriteError); // headers are never written
+    expect(() => assertWriteAllowed(VERIFY_SHEET, "A2:S2")).toThrow(ForbiddenWriteError); // past R
+    expect(() => assertWriteAllowed(VERIFY_SHEET, "S5")).toThrow(ForbiddenWriteError);
     expect(() => assertWriteAllowed(VERIFY_SHEET, "A2:Q3")).toThrow(ForbiddenWriteError); // multi-row
     expect(() => assertWriteAllowed(VERIFY_SHEET, "Signals!A2")).toThrow(ForbiddenWriteError);
   });

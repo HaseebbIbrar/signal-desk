@@ -1,10 +1,13 @@
-import { type Cell, HEADERS, SIGNALS_SHEET, VERIFY_SHEET } from "@/lib/constants";
+import { type Cell, HEADERS, SIGNALS_SHEET, SUB_GROUP_HEADER, VERIFY_SHEET } from "@/lib/constants";
 import { isoToSerial } from "@/lib/excel-date";
 import { MemoryBackend } from "@/lib/workbook/memory";
 import { createSignalService } from "@/lib/service";
 import type { AuditEntry } from "@/lib/audit";
 
+/** The original 17-column header (no R1). */
 export const header = (): Cell[] => [...HEADERS];
+/** The header since 9 Oct 2026: A:Q plus R1 "Role Sub-Group". */
+export const headerAR = (): Cell[] => [...HEADERS, SUB_GROUP_HEADER];
 
 export const separator = (iso: string): Cell[] => [isoToSerial(iso), ...Array<Cell>(16).fill("")];
 

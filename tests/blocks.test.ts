@@ -88,7 +88,7 @@ describe("finding the latest block", () => {
     expect(rows[0].cells[0]).toBeNull();
     expect(rows[0].cells[1]).toBe("Mon");
     expect(rows[0].cells[2]).toBe("Acme");
-    expect(rows[0].cells).toHaveLength(17);
+    expect(rows[0].cells).toHaveLength(18); // A:R
   });
 
   it("finds the last row with a value, ignoring formatted-but-empty rows", () => {

@@ -53,7 +53,7 @@ export default function SignalsClient({ csrf }: { csrf: string }) {
       if (companyType && r.companyType !== companyType) return false;
       if (hideTicked && r.ticked) return false;
       if (q) {
-        const hay = [r.company, r.jobTitle, r.location, r.matchedKeyword, r.domain, r.notes].join(" ").toLowerCase();
+        const hay = [r.company, r.jobTitle, r.location, r.matchedKeyword, r.domain, r.notes, r.roleSubGroup].join(" ").toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -158,7 +158,7 @@ export default function SignalsClient({ csrf }: { csrf: string }) {
             <option value="">All role groups</option>
             {roleGroups.map((g) => (
               <option key={g} value={g}>
-                Group {g}
+                {g}
               </option>
             ))}
           </select>
@@ -232,12 +232,11 @@ function SignalCard({ row, pending, onToggle }: { row: SignalRowDTO; pending: bo
           )}
         </label>
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <h2 className="font-semibold leading-snug">{row.company || "(no company)"}</h2>
-            {row.roleGroup && <Chip tone="pink">Group {row.roleGroup}</Chip>}
-          </div>
+          <h2 className="font-semibold leading-snug">{row.company || "(no company)"}</h2>
           <p className="text-sm text-white/85">{row.jobTitle}</p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {row.roleGroup && <Chip tone="pink">{row.roleGroup}</Chip>}
+            {row.roleSubGroup && <Chip tone="pink">{row.roleSubGroup}</Chip>}
             {row.companyType && <Chip>{row.companyType}</Chip>}
             {row.location && <Chip>{row.location}</Chip>}
           </div>

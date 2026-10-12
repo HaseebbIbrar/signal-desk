@@ -1,7 +1,8 @@
 // Signal Desk business logic. All reads and writes go to the workbook live (reads cached ~60s).
 //
 // Write rules (also enforced again at the backend by assertWriteAllowed):
-//  - only the "Signals to verify decision make" tab, only columns A:Q;
+//  - only the "Signals to verify decision make" tab, only columns A:R, and R (Role Sub-Group) only
+//    when that tab's header R1 is "Role Sub-Group" (otherwise A:Q, as before). Headers are never written;
 //  - exactly three operations: append a ticked row, write column M, remove an unticked row whose
 //    column M is empty;
 //  - rows are always located by Job URL right before writing, never by a remembered row number.
@@ -11,6 +12,7 @@ import {
   buildBlocks,
   blockDates,
   findSignal,
+  hasSubGroupColumn,
   isBlank,
   isDataRow,
   isRowBlank,
@@ -19,6 +21,7 @@ import {
   rowsForDate,
   type SheetRow,
   usedRangeToRows,
+  withoutForeignR,
 } from "./blocks";
 import { TtlCache, Mutex } from "./cache";
 import {
@@ -29,7 +32,10 @@ import {
   JOB_URL_COL_LETTER,
   LAST_COL_LETTER,
   NUM_COLS,
+  READ_COLS,
   SIGNALS_SHEET,
+  SUB_GROUP_COL_LETTER,
+  SUB_GROUP_HEADER,
   VERIFY_SHEET,
 } from "./constants";
 import { ConflictError, DecisionMakerPresentError, NotFoundError, UpstreamError, ValidationError } from "./errors";
@@ -67,9 +73,18 @@ function protectText(c: Cell): Cell {
   return c;
 }
 
-/** The 17 values to append for a ticked signal. Column A becomes a real Excel date serial. */
-export function buildAppendValues(source: SheetRow, blockDate: string | null): { values: Cell[]; dateIsSerial: boolean } {
-  const values: Cell[] = source.cells.slice(0, NUM_COLS).map((c) => (c === null || c === undefined ? "" : c));
+/**
+ * The values to append for a ticked signal: A:R (18) when `withSubGroup`, otherwise A:Q (17).
+ * Column A becomes a real Excel date serial. An empty R (older rows) is appended as empty.
+ */
+export function buildAppendValues(
+  source: SheetRow,
+  blockDate: string | null,
+  withSubGroup = true,
+): { values: Cell[]; dateIsSerial: boolean } {
+  const width = withSubGroup ? READ_COLS : NUM_COLS;
+  const values: Cell[] = source.cells.slice(0, width).map((c) => (c === null || c === undefined ? "" : c));
+  while (values.length < width) values.push("");
   let dateIsSerial = false;
   const a = values[C.dateFound];
   if (typeof a === "number") {
@@ -92,7 +107,8 @@ export function createSignalService(opts: ServiceOptions) {
   const writeLock = new Mutex();
 
   async function readFresh(sheet: string, sessionId?: string): Promise<SheetRow[]> {
-    return usedRangeToRows(await backend.getUsedRange(sheet, sessionId));
+    // Column R only counts when that tab's R1 is "Role Sub-Group"; otherwise it's blanked here.
+    return withoutForeignR(usedRangeToRows(await backend.getUsedRange(sheet, sessionId)));
   }
 
   function readCached(sheet: string): Promise<SheetRow[]> {
@@ -149,6 +165,7 @@ export function createSignalService(opts: ServiceOptions) {
         jobTitle: display(c[C.jobTitle]),
         matchedKeyword: display(c[C.matchedKeyword]),
         roleGroup: display(c[C.roleGroup]),
+        roleSubGroup: display(c[C.roleSubGroup]),
         companyType: display(c[C.companyType]),
         location: display(c[C.location]),
         status: display(c[C.status]),
@@ -185,6 +202,7 @@ export function createSignalService(opts: ServiceOptions) {
         company: display(c[C.company]),
         jobTitle: display(c[C.jobTitle]),
         roleGroup: display(c[C.roleGroup]),
+        roleSubGroup: display(c[C.roleSubGroup]),
         companyType: display(c[C.companyType]),
         location: display(c[C.location]),
         priorOutreach: display(c[C.priorOutreach]),
@@ -203,7 +221,10 @@ export function createSignalService(opts: ServiceOptions) {
 
   // ---------------------------------------------------------------- writes
 
-  /** Tick: append the signal's full A:Q row to the next empty row of the verify tab (append only). */
+  /**
+   * Tick: append the signal's row to the next empty row of the verify tab (append only).
+   * A:R when the verify tab's R1 is "Role Sub-Group"; otherwise A:Q only, with a logged warning.
+   */
   async function tick(jobUrl: unknown, user: string): Promise<TickResult> {
     const key = requireKey(jobUrl);
 
@@ -224,10 +245,24 @@ export function createSignalService(opts: ServiceOptions) {
           source = findSignal(buildBlocks(await readFresh(SIGNALS_SHEET)), key, keyOf);
         }
         if (!source) throw new NotFoundError("That Job URL is not in the Signals tab");
-        const { values, dateIsSerial } = buildAppendValues(source.row, source.blockDate);
+
+        // Header check before appending: column R is written only when R1 is "Role Sub-Group".
+        const withSubGroup = hasSubGroupColumn(verifyRows);
+        if (!withSubGroup) {
+          console.warn(
+            JSON.stringify({
+              type: "warning",
+              time: new Date().toISOString(),
+              message: `Verify tab header R1 is not "${SUB_GROUP_HEADER}": appending A:Q only (Role Sub-Group not copied)`,
+              jobUrl: key,
+            }),
+          );
+        }
+        const { values, dateIsSerial } = buildAppendValues(source.row, source.blockDate, withSubGroup);
+        const lastCol = withSubGroup ? SUB_GROUP_COL_LETTER : LAST_COL_LETTER;
 
         const target = lastValueRow(verifyRows) + 1;
-        const address = `A${target}:${LAST_COL_LETTER}${target}`;
+        const address = `A${target}:${lastCol}${target}`;
         // Append only: the target row must be empty right now, or we stop rather than overwrite.
         const current = await backend.getRange(VERIFY_SHEET, address, sid);
         if (!isRowBlank(current[0] ?? [])) {
@@ -243,7 +278,15 @@ export function createSignalService(opts: ServiceOptions) {
           audit({ user, action: "tick_append", jobUrl: key, sheet: VERIFY_SHEET, row: target, outcome: "error", detail: "read-back mismatch" });
           throw new UpstreamError("The row was written but could not be confirmed. Please reload and check.");
         }
-        audit({ user, action: "tick_append", jobUrl: key, sheet: VERIFY_SHEET, row: target, outcome: "ok" });
+        audit({
+          user,
+          action: "tick_append",
+          jobUrl: key,
+          sheet: VERIFY_SHEET,
+          row: target,
+          outcome: "ok",
+          detail: withSubGroup ? "A:R" : `A:Q only (verify tab R1 is not "${SUB_GROUP_HEADER}")`,
+        });
         return { status: "appended", row: target, hasDecisionMaker: false };
       }),
     );
@@ -254,7 +297,8 @@ export function createSignalService(opts: ServiceOptions) {
     const key = requireKey(jobUrl);
     return writeLock.run(() =>
       backend.withSession(async (sid) => {
-        const matches = verifyMatches(await readFresh(VERIFY_SHEET, sid), key);
+        const verifyRows = await readFresh(VERIFY_SHEET, sid);
+        const matches = verifyMatches(verifyRows, key);
         if (matches.length === 0) return { status: "not_ticked", row: null };
         if (matches.length > 1) {
           const rows = matches.map((m) => m.rowNumber).join(", ");
@@ -269,8 +313,11 @@ export function createSignalService(opts: ServiceOptions) {
           );
         }
 
+        // Remove the same width that was appended: A:R when R is the Role Sub-Group column (so a
+        // row's sub-group never stays behind, out of line), otherwise A:Q only, as before.
+        const lastCol = hasSubGroupColumn(verifyRows) ? SUB_GROUP_COL_LETTER : LAST_COL_LETTER;
         // Re-read that exact row in this session: it must still be this job and still have an empty M.
-        const address = `A${row}:${LAST_COL_LETTER}${row}`;
+        const address = `A${row}:${lastCol}${row}`;
         const fresh = (await backend.getRange(VERIFY_SHEET, address, sid))[0] ?? [];
         if (normaliseJobUrl(fresh[C.jobUrl]) !== key) throw new ConflictError("The verify tab changed while removing. Please try again.");
         if (!isBlank(fresh[C.decisionMaker])) {

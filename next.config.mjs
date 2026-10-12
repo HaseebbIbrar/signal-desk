@@ -1,5 +1,3 @@
-import type { NextConfig } from "next";
-
 const isDev = process.env.NODE_ENV !== "production";
 
 // Next.js injects inline bootstrap scripts, so 'unsafe-inline' is needed without a nonce setup.
@@ -17,7 +15,10 @@ const csp = [
   "object-src 'none'",
 ].join("; ");
 
-const nextConfig: NextConfig = {
+/** @type {import("next").NextConfig} */
+const nextConfig = {
+  // Explicit, so a host that rewrites the config can't silently drop the .tsx/.ts app routes.
+  pageExtensions: ["tsx", "ts", "jsx", "js"],
   poweredByHeader: false,
   async headers() {
     return [

@@ -12,11 +12,11 @@ There is no database. Everything is read from and written to **`SwooScale Master
 
 | Allowed | Where |
 |---|---|
-| Append a ticked row | next empty row of *Signals to verify decision make*, columns A:Q |
+| Append a ticked row | next empty row of *Signals to verify decision make*: columns A:R if that tab's R1 is "Role Sub-Group", otherwise A:Q (with a logged warning) |
 | Write decision-maker link(s) | column M of the row whose Job URL matches |
-| Remove an unticked row | only if its column M is empty: clear A:Q, then delete A:Q with shift-up |
+| Remove an unticked row | only if its column M is empty: clear, then delete with shift-up, the same width that's appended (A:R or A:Q) |
 
-Nothing else is written. The **Signals** tab and every other tab are read-only. `src/lib/workbook/guard.ts` enforces this inside every backend write method, and the tests check it. Every write, and every refused write, is logged as one JSON line (`"type":"audit"`) in the server logs. On Vercel you'll find them under Project → Logs.
+Nothing else is written, and headers are never written. If you want ticks to copy column R, add the header `Role Sub-Group` to R1 of the verify tab yourself. The **Signals** tab and every other tab are read-only. `src/lib/workbook/guard.ts` enforces this inside every backend write method, and the tests check it. Every write, and every refused write, is logged as one JSON line (`"type":"audit"`) in the server logs. On Vercel you'll find them under Project → Logs.
 
 ---
 
@@ -146,9 +146,9 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 ## How it behaves
 
-- **Today (/signals)** shows the rows under the most recent separator date in *Signals*. The "Block date" picker lists every block date. The filters are role group, company type, text search and "hide already ticked". Counters read `X signals today · Y ticked`.
-- **Tick** appends the full A:Q row to the next empty row of the verify tab. Row identity is the Job URL, normalised as follows: trim, drop the query string and `#fragment`, drop trailing slashes, lower-case the host. Query parameters that identify the job (`jk`, `currentJobId`, `gh_jid`, `jobId`, …) are kept so different jobs don't collide; see `src/lib/job-url.ts`. If the Job URL is already in the verify tab, nothing is written and the row simply shows as ticked. Ticks are worked out from the verify tab on every load, so they survive reloads and show on other devices.
-- **Untick** asks for confirmation. It's blocked when column M already has a link, and the app says why. Otherwise the row's A:Q cells are cleared, then deleted with shift-up. Columns beyond Q are not moved.
+- **Today (/signals)** shows the rows under the most recent separator date in *Signals*. The "Block date" picker lists every block date. The filters are role group, company type, text search and "hide already ticked". The role-group and company-type options are built from the values in the data, so old and new group names both appear exactly as written in the sheet. Each card shows the Role Sub-Group (column R) next to the role group when there is one. Counters read `X signals today · Y ticked`.
+- **Tick** appends the full row (A:R, or A:Q when the verify tab has no "Role Sub-Group" header in R1) to the next empty row of the verify tab. The next empty row is found from columns A:Q only. Row identity is the Job URL, normalised as follows: trim, drop the query string and `#fragment`, drop trailing slashes, lower-case the host. Query parameters that identify the job (`jk`, `currentJobId`, `gh_jid`, `jobId`, …) are kept so different jobs don't collide; see `src/lib/job-url.ts`. If the Job URL is already in the verify tab, nothing is written and the row simply shows as ticked. Ticks are worked out from the verify tab on every load, so they survive reloads and show on other devices.
+- **Untick** asks for confirmation. It's blocked when column M already has a link, and the app says why. Otherwise the row's cells are cleared, then deleted with shift-up: A:R when R1 is "Role Sub-Group" (so a sub-group never stays behind, out of line), otherwise A:Q. Columns past that width are not moved.
 - **Verified (/verified)** groups the verify tab by Date Found, newest first. The filters are "Missing decision maker", "Done" and "All". Each row has one input per LinkedIn link, an "+ Add another" button, and Save. Only `linkedin.com/in/…` and `linkedin.com/sales/…` links are accepted. The row is found again by Job URL right before writing, then the cell is read back, and a green **✓ Saved to master sheet** appears.
 - **Busy workbook**: on `409/423/429/503/504` the server retries with backoff. If the file is still busy, the page shows **"Sheet busy, retrying…"** and retries up to 5 more times before it shows a clear error. It never fails silently. The range delete is never retried blindly, because a retry re-locates the row by Job URL first.
 - **Caching**: reads are cached for about 60 seconds per server instance. Every write invalidates the verify-tab cache. *Signals* is never written by the app, so its cache only expires by time.

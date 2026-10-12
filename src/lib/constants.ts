@@ -30,10 +30,19 @@ export const HEADERS = [
   "My Comments",
 ] as const;
 
-/** Columns A:Q. */
+/** Columns A:Q: the original 17 columns every row has. */
 export const NUM_COLS = 17;
 export const FIRST_COL_LETTER = "A";
 export const LAST_COL_LETTER = "Q";
+
+/**
+ * Column R "Role Sub-Group", added 9 Oct 2026. It's read as a sub-group only when the tab's R1
+ * header says so; older rows simply have it empty.
+ */
+export const SUB_GROUP_HEADER = "Role Sub-Group";
+/** Columns A:R: what the app reads (and, when R1 is "Role Sub-Group", appends and removes). */
+export const READ_COLS = 18;
+export const SUB_GROUP_COL_LETTER = "R";
 
 /** Zero-based column indexes within A:Q. */
 export const C = {
@@ -54,6 +63,7 @@ export const C = {
   notes: 14, // O
   verifiedEvidence: 15, // P
   myComments: 16, // Q
+  roleSubGroup: 17, // R
 } as const;
 
 export const DECISION_MAKER_COL_LETTER = "M";

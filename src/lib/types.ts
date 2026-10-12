@@ -11,6 +11,8 @@ export interface SignalRowDTO {
   jobTitle: string;
   matchedKeyword: string;
   roleGroup: string;
+  /** Column R; empty on rows from before 9 Oct 2026. */
+  roleSubGroup: string;
   companyType: string;
   location: string;
   status: string;
@@ -39,6 +41,8 @@ export interface VerifiedRowDTO {
   company: string;
   jobTitle: string;
   roleGroup: string;
+  /** Column R; empty on rows from before 9 Oct 2026, or when the verify tab has no R1 header. */
+  roleSubGroup: string;
   companyType: string;
   location: string;
   priorOutreach: string;

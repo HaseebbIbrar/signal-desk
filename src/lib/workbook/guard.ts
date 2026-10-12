@@ -1,8 +1,9 @@
 // The single write gate. The app may write ONLY to "Signals to verify decision make", ONLY inside
-// columns A:Q, ONLY one data row at a time (never the header row), and never to any other tab.
+// columns A:R (R = Role Sub-Group, used only when the tab's R1 header says so), ONLY one data row
+// at a time (never the header row, so headers are never written), and never to any other tab.
 
 import { parseA1, type A1Range } from "../a1";
-import { NUM_COLS, VERIFY_SHEET } from "../constants";
+import { READ_COLS, VERIFY_SHEET } from "../constants";
 import { ForbiddenWriteError } from "../errors";
 
 export function assertWriteAllowed(sheet: string, address: string): A1Range {
@@ -24,8 +25,8 @@ export function assertWriteAllowed(sheet: string, address: string): A1Range {
   if (range.startRow < 2) {
     throw new ForbiddenWriteError("Refused: the header row is never written");
   }
-  if (range.startCol < 0 || range.endCol > NUM_COLS - 1) {
-    throw new ForbiddenWriteError("Refused: writes are limited to columns A:Q");
+  if (range.startCol < 0 || range.endCol > READ_COLS - 1) {
+    throw new ForbiddenWriteError("Refused: writes are limited to columns A:R");
   }
   return range;
 }

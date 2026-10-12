@@ -52,7 +52,7 @@ export default function VerifiedClient({ csrf }: { csrf: string }) {
       const sticky = justSaved.has(r.key);
       if (!sticky && filter === "missing" && r.hasDecisionMaker) return false;
       if (!sticky && filter === "done" && !r.hasDecisionMaker) return false;
-      if (q && ![r.company, r.jobTitle, r.location].join(" ").toLowerCase().includes(q)) return false;
+      if (q && ![r.company, r.jobTitle, r.location, r.roleGroup, r.roleSubGroup].join(" ").toLowerCase().includes(q)) return false;
       return true;
     });
     const map = new Map<string, VerifiedRowDTO[]>();
@@ -195,7 +195,8 @@ function VerifiedCard({ row, csrf, onSaved }: { row: VerifiedRowDTO; csrf: strin
         {row.hasDecisionMaker ? <Chip>✓ Done</Chip> : <Chip tone="pink">Needs decision maker</Chip>}
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm">
-        {row.roleGroup && <Chip tone="pink">Group {row.roleGroup}</Chip>}
+        {row.roleGroup && <Chip tone="pink">{row.roleGroup}</Chip>}
+        {row.roleSubGroup && <Chip tone="pink">{row.roleSubGroup}</Chip>}
         {row.companyType && <Chip>{row.companyType}</Chip>}
         {row.location && <Chip>{row.location}</Chip>}
         {href && (
