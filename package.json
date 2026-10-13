@@ -5,7 +5,7 @@
   "description": "SwooScale Signal Desk: review daily job signals and record decision makers, backed live by the SharePoint master workbook.",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/sg-prepare-build.cjs && next build",
     "start": "next start",
     "test": "vitest run",
     "test:dev-copy": "node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.integration.mts",

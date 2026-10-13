@@ -149,6 +149,7 @@ If all of this works, the deployment is good.
 | What you see | Cause | Fix |
 |---|---|---|
 | Build fails: `Cannot find module '@tailwindcss/postcss'` / `typescript` | An old copy of the code, from before the build tools were moved into `dependencies` | Deploy the latest `main` branch or the latest `signal-desk.zip`. As a stop-gap, use `npm ci --include=dev` |
+| Site 404s and the log lists only /404, even with the Custom preset | SiteGround's fix_typescript deletes our config files | Latest zip (build script recreates them; see the [sg-prepare] lines in the build log) |
 | Build succeeds but the site shows 404 and the log lists only `/404` | SiteGround's TypeScript step rewrote next.config.ts | Use the latest zip (next.config.mjs) |
 | Build crashes in "Running TypeScript" with `readlink /proc/self/exe` | TypeScript 7 native binary | Use the latest zip, which uses TypeScript 5.9 |
 | Build fails: `Cannot find module 'vitest'` or type errors in `tests/` | An old `tsconfig.json` that still type-checks the test files | Deploy the latest code (its `tsconfig.json` excludes `tests`, `tests-integration` and the vitest configs) |
