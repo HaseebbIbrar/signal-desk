@@ -170,7 +170,10 @@ npm install
 npm test          # vitest
 npm run typecheck
 npm run dev
+npm run snapshot  # after ANY change under src/ (or next.config.mjs, postcss.config.mjs, tsconfig.json)
 ```
+
+`npm run build` restores `src/` and the root configs from `scripts/src-snapshot.json` before building. It does this because SiteGround's build alters those files; see DEPLOY-SITEGROUND.md. A test fails while the snapshot is stale. If you build with a stale snapshot, your newer versions are not lost: they're moved to `.sg-removed/`.
 
 Tests cover the date-serial conversion, Job URL normalisation, finding the latest block (separator detection), the append-only rule, refusing to write to *Signals*, refusing to untick a row that has a decision maker, and Graph retry behaviour.
 

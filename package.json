@@ -5,13 +5,14 @@
   "description": "SwooScale Signal Desk: review daily job signals and record decision makers, backed live by the SharePoint master workbook.",
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/sg-prepare-build.cjs && next build",
+    "build": "node scripts/sg-prepare-build.cjs && next build && node scripts/sg-verify-build.cjs",
     "start": "next start",
     "test": "vitest run",
     "test:dev-copy": "node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.integration.mts",
     "typecheck": "tsc --noEmit",
     "hash-password": "node scripts/hash-password.mjs",
-    "find-ids": "node --env-file=.env.local scripts/find-graph-ids.mjs"
+    "find-ids": "node --env-file=.env.local scripts/find-graph-ids.mjs",
+    "snapshot": "node scripts/make-src-snapshot.cjs"
   },
   "engines": {
     "node": ">=20.9"

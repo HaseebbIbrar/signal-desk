@@ -1,19 +1,26 @@
 #!/usr/bin/env node
 // Runs before `next build` (see package.json "build").
 //
-// Why: SiteGround's Node.js build runs a `fix_typescript` step after `npm install` that deletes our
-// next.config.mjs / postcss.config.mjs and injects its own next config, which drops our .tsx app
-// routes (the site then only has /404). This script puts our config back, without losing the
-// host's: it renames the host's next config to next.config.host.* and writes our next.config.mjs,
-// which loads the host config, spreads it, and applies ours on top.
+// Why: SiteGround's Node.js build runs a hidden `fix_typescript` step after `npm install` that deletes
+// our next.config.mjs / postcss.config.mjs, injects its own next config, and appears to alter files
+// under src/. The site then only has /404. This script:
+//   1. prints the NAMES (never values) of NEXT_* / NODE_* / *TYPESCRIPT* environment variables;
+//   2. prints every next.config.* / postcss.config.* it finds;
+//   3. renames a host next config to next.config.host.* (our config merges it);
+//   4. compares src/ and the root configs with scripts/src-snapshot.json, prints every missing,
+//      changed or extra file, and restores the snapshot exactly. Nothing is deleted: changed files
+//      are copied, and extra files under src/ are moved, to .sg-removed/<time>/;
+//   5. makes sure our next.config.mjs and postcss.config.mjs are in place.
 //
-// It only ever touches next.config.* and postcss.config.* in the project root. Never src/, .env*,
-// or anything else. When the configs are already ours (local dev, the repo), it only logs.
+// It touches only src/, next.config.*, postcss.config.*, tsconfig.json and .sg-removed/. Never
+// .env* or anything else. When everything already matches (local dev, the repo), it only logs.
+// Set SG_PREPARE_NO_RESTORE=1 to report differences without restoring them.
 
 "use strict";
 
 const fs = require("node:fs");
 const path = require("node:path");
+const snap = require("./src-snapshot-lib.cjs");
 
 const MARKER = "// signal-desk:own-config";
 const P = "[sg-prepare]";
@@ -134,7 +141,13 @@ function hostName(file, contents, root) {
   return esm ? "next.config.host.mjs" : "next.config.host.cjs";
 }
 
-function prepare(root, log = console.log) {
+function prepare(root, log = console.log, env = process.env) {
+  // (1) Names only: values may be secrets.
+  const envNames = Object.keys(env)
+    .filter((k) => /^NEXT_/i.test(k) || /^NODE_/i.test(k) || /TYPESCRIPT/i.test(k))
+    .sort();
+  log(`${P} env var names (NEXT_*, NODE_*, *TYPESCRIPT*): ${envNames.length ? envNames.join(", ") : "(none)"}`);
+
   const entries = fs.readdirSync(root);
   const configs = entries
     .filter((f) => /^(next|postcss)\.config\.[^.]+$/.test(f) && fs.statSync(path.join(root, f)).isFile())
@@ -164,6 +177,28 @@ function prepare(root, log = console.log) {
     actions.push(`renamed host config ${f} -> ${target}`);
   });
 
+  // (4) Compare src/ and the root configs with the snapshot, report every difference, restore.
+  const snapshot = snap.readSnapshot(root);
+  if (!snapshot) {
+    log(`${P} WARNING: ${snap.SNAPSHOT_FILE} not found, so src/ cannot be checked or restored`);
+  } else {
+    const diff = snap.diffAgainstSnapshot(root, snapshot);
+    const total = diff.missing.length + diff.changed.length + diff.extra.length;
+    log(`${P} snapshot check: ${Object.keys(snapshot.files).length} files expected; ${diff.missing.length} missing, ${diff.changed.length} changed, ${diff.extra.length} extra`);
+    for (const rel of diff.missing) log(`${P} MISSING ${rel}`);
+    for (const c of diff.changed) {
+      log(`${P} CHANGED ${c.path} (snapshot ${c.oldSize} bytes, now ${c.newSize} bytes); first 300 characters now:`);
+      for (const line of (c.preview || "(empty)").split(/\r?\n/)) log(`${P} |   ${line}`);
+    }
+    for (const rel of diff.extra) log(`${P} EXTRA ${rel}`);
+    if (total && env.SG_PREPARE_NO_RESTORE === "1") {
+      log(`${P} SG_PREPARE_NO_RESTORE=1: reporting only, nothing restored`);
+    } else if (total) {
+      const where = snap.restoreSnapshot(root, snapshot, diff);
+      actions.push(`restored ${diff.missing.length + diff.changed.length} file(s) from the snapshot; previous versions and extra files kept in ${where.split(path.sep).join("/")}/`);
+    }
+  }
+
   // (c) Write our next.config.mjs unless ours is already there.
   const ours = path.join(root, "next.config.mjs");
   if (fs.existsSync(ours) && fs.readFileSync(ours, "utf8").startsWith(MARKER)) {
@@ -188,7 +223,7 @@ function prepare(root, log = console.log) {
   }
 
   if (actions.length) actions.forEach((a) => log(`${P} ${a}`));
-  else log(`${P} nothing to change: configs are already ours`);
+  else log(`${P} nothing to change: configs and src/ already match`);
   return actions;
 }
 

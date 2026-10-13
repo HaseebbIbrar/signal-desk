@@ -40,6 +40,7 @@
     "tests",
     "tests-integration",
     "vitest.config.mts",
-    "vitest.integration.mts"
+    "vitest.integration.mts",
+    ".sg-removed"
   ]
 }

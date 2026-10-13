@@ -11,3 +11,7 @@ next-env.d.ts
 *.pem
 *.key
 .vercel
+
+# Build safety net (scripts/sg-prepare-build.cjs) and Next.js dev-server output
+.sg-removed/
+AGENTS.md

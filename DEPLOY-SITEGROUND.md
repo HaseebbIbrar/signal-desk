@@ -144,11 +144,33 @@ If all of this works, the deployment is good.
 
 ---
 
+## Reading the build log: `[sg-prepare]` and `[sg-verify]` lines
+
+`npm run build` runs three steps: `scripts/sg-prepare-build.cjs`, then `next build`, then `scripts/sg-verify-build.cjs`. SiteGround runs a hidden `fix_typescript` step between `npm install` and our build. It deletes or changes some of our files, and these lines show what it did and how the build recovered.
+
+**`[sg-prepare]`** (before the build):
+- `env var names (...)`: the **names** of `NEXT_*`, `NODE_*` and `*TYPESCRIPT*` environment variables. Values are never printed.
+- `----- next.config.js ... -----` with `|` lines: the full contents of every `next.config.*` / `postcss.config.*` found. This is where SiteGround's injected config shows up.
+- `renamed host config next.config.js -> next.config.host.cjs`: SiteGround's config is kept, and ours loads and merges it.
+- `snapshot check: N files expected; X missing, Y changed, Z extra`, then one line per difference:
+  - `MISSING <file>`: the file was deleted after upload. It's put back.
+  - `CHANGED <file> (snapshot A bytes, now B bytes)`: the file was altered. The first 300 characters of the altered version follow, then it's put back.
+  - `EXTRA <file>`: a file under `src/` that isn't ours. It's moved out of the way.
+- `restored N file(s) from the snapshot; previous versions and extra files kept in .sg-removed/<time>/`: nothing is deleted. Altered and extra files are kept there for inspection.
+- `nothing to change: configs and src/ already match`: no tampering this time.
+
+The snapshot is `scripts/src-snapshot.json`: every file under `src/` plus `next.config.mjs`, `postcss.config.mjs` and `tsconfig.json`, in one plain JSON file.
+
+**`[sg-verify]`** (after the build):
+- `[sg-verify] OK: /login, /signals and /verified are built, plus N /api route(s)`: the build is good.
+- `[sg-verify] FAILED: app routes missing ...`: the build produced no app pages (the "/404 only" problem). The step exits with an error so the broken build isn't deployed. Send SwooScale the `[sg-prepare]` and `[sg-verify]` lines from the log.
+
 ## Troubleshooting
 
 | What you see | Cause | Fix |
 |---|---|---|
 | Build fails: `Cannot find module '@tailwindcss/postcss'` / `typescript` | An old copy of the code, from before the build tools were moved into `dependencies` | Deploy the latest `main` branch or the latest `signal-desk.zip`. As a stop-gap, use `npm ci --include=dev` |
+| Build fails with `[sg-verify] FAILED: app routes missing` | The build produced no app pages, even after the restore | Send SwooScale every `[sg-prepare]` and `[sg-verify]` line from the build log |
 | Site 404s and the log lists only /404, even with the Custom preset | SiteGround's fix_typescript deletes our config files | Latest zip (build script recreates them; see the [sg-prepare] lines in the build log) |
 | Build succeeds but the site shows 404 and the log lists only `/404` | SiteGround's TypeScript step rewrote next.config.ts | Use the latest zip (next.config.mjs) |
 | Build crashes in "Running TypeScript" with `readlink /proc/self/exe` | TypeScript 7 native binary | Use the latest zip, which uses TypeScript 5.9 |
