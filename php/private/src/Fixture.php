@@ -95,6 +95,11 @@ final class Fixture
             $row[Sheet::DM_LINKEDIN] = $m;
             $verify[] = array_merge($row, [$s, $t, $u]);
         }
+        // A second decision maker for the job on row 4 (same Job URL, different person): its own card.
+        $second = $dataRows[2];
+        $second[Sheet::DM_LINKEDIN] = 'https://www.linkedin.com/in/example-vp-engineering';
+        foreach ([Sheet::PRIOR_OUTREACH, Sheet::NOTES, Sheet::VERIFIED_EVIDENCE, Sheet::MY_COMMENTS] as $col) $second[$col] = '';
+        $verify[] = array_merge($second, ['Owns the platform team', 'Robin Example', 'VP Engineering']);
 
         // Decision Makers tab: header + the already-sent row.
         $sent = $verify[5];

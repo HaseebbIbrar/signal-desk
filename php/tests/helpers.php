@@ -39,7 +39,7 @@ function t_signals_tab(): array
         t_sep('2026-10-15'),
         t_signal('2026-10-15', 'Old Co', 'https://jobs.test/old', [6 => 'B - Data & AI', 17 => '']),
         t_sep(T_DAY),
-        t_signal(T_DAY, 'Acme', 'https://jobs.test/acme?utm=feed'),
+        t_signal(T_DAY, 'Acme', 'https://jobs.test/acme?utm_source=feed'),
         t_signal(T_DAY, 'Beta', 'https://jobs.test/beta'),
         t_signal(T_DAY, 'Gamma', 'https://jobs.test/gamma', [14 => '=HYPERLINK(evil)']),
     ];

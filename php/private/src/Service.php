@@ -92,17 +92,33 @@ final class Service
     }
 
     /** Verify-row state needed by the Signals page. */
+    private static function mstuFilled(array $c): array
+    {
+        $filled = [];
+        foreach ([Sheet::DM_LINKEDIN => 'M', Sheet::DM_NOTE => 'S', Sheet::DM_NAME => 'T', Sheet::DM_TITLE => 'U'] as $col => $letter) {
+            if (!Sheet::isBlank($c[$col] ?? null)) $filled[] = $letter;
+        }
+        return $filled;
+    }
+
+    /**
+     * Per job: verified if at least one verify row has its URL. Untick is allowed only when exactly one
+     * verify row exists for the job and its M, S, T and U are all empty ("locked" otherwise).
+     */
     private function verifyIndex(array $verifyRows): array
     {
         $idx = [];
         foreach (self::dataRows($verifyRows) as $r) {
             $k = self::key($r);
-            if ($k === '' || isset($idx[$k])) continue;
+            if ($k === '') continue;
             $c = $r['cells'];
-            $any = false;
-            foreach ([Sheet::DM_LINKEDIN, Sheet::DM_NOTE, Sheet::DM_NAME, Sheet::DM_TITLE] as $col) if (!Sheet::isBlank($c[$col] ?? null)) $any = true;
-            $idx[$k] = ['row' => $r['row'], 'hasDM' => !Sheet::isBlank($c[Sheet::DM_LINKEDIN] ?? null), 'locked' => $any];
+            $e = $idx[$k] ?? ['row' => $r['row'], 'rows' => 0, 'hasDM' => false, 'anyFilled' => false];
+            $e['rows']++;
+            if (!Sheet::isBlank($c[Sheet::DM_LINKEDIN] ?? null)) $e['hasDM'] = true;
+            if (self::mstuFilled($c)) $e['anyFilled'] = true;
+            $idx[$k] = $e;
         }
+        foreach ($idx as &$e) $e['locked'] = $e['rows'] > 1 || $e['anyFilled'];
         return $idx;
     }
 
@@ -141,8 +157,8 @@ final class Service
                     'status' => self::d($c, Sheet::STATUS), 'source' => self::d($c, Sheet::SOURCE),
                     'priorOutreach' => self::d($c, Sheet::PRIOR_OUTREACH), 'notes' => self::d($c, Sheet::NOTES),
                     'verifiedEvidence' => self::d($c, Sheet::VERIFIED_EVIDENCE), 'myComments' => self::d($c, Sheet::MY_COMMENTS),
-                    'ticked' => (bool) $v, 'verifyRow' => $v['row'] ?? null, 'hasDecisionMaker' => $v['hasDM'] ?? false,
-                    'untickLocked' => $v['locked'] ?? false,
+                    'ticked' => (bool) $v, 'verifyRow' => $v['row'] ?? null, 'verifyRows' => $v['rows'] ?? 0,
+                    'hasDecisionMaker' => $v['hasDM'] ?? false, 'untickLocked' => $v['locked'] ?? false,
                     'rejected' => $rej ? ['date' => $rej['date'], 'user' => $rej['user']] : null,
                 ];
             }
@@ -205,50 +221,59 @@ final class Service
         return true;
     }
 
+    /**
+     * Verified page: one card per verify-tab row (several decision makers per job are separate rows),
+     * grouped under their job. Status per card: waiting (M empty) / ready (M filled, not sent) / sent.
+     */
     public function verifiedView(): array
     {
         $verifyRows = $this->readCached(Sheet::VERIFY);
         $dmRows = $this->readCached(Sheet::DECISION_MAKERS);
         $dmIdx = self::dmIndex($dmRows);
         $receipt = $this->lastReceipt();
-        $undoKey = ($receipt && self::receiptStillValid($receipt, $dmRows)) ? $receipt['job'] : null;
+        $receiptOk = $receipt && self::receiptStillValid($receipt, $dmRows);
 
-        $rows = self::dataRows($verifyRows);
-        $counts = [];
-        foreach ($rows as $r) {
-            $k = self::key($r);
-            if ($k !== '') $counts[$k] = ($counts[$k] ?? 0) + 1;
-        }
-        $out = [];
+        $groups = [];
         $status = ['waiting' => 0, 'ready' => 0, 'sent' => 0];
-        foreach ($rows as $r) {
+        foreach (self::dataRows($verifyRows) as $r) {
             $c = $r['cells'];
             $k = self::key($r);
+            $gk = $k !== '' ? $k : 'row:' . $r['row'];
             $m = $c[Sheet::DM_LINKEDIN] ?? null;
-            $sentRow = (!Sheet::isBlank($m) && $k !== '') ? ($dmIdx[$k . '|' . LinkedIn::key($m)] ?? null) : null;
+            $linkKey = LinkedIn::key($m);
+            $sentRow = (!Sheet::isBlank($m) && $k !== '') ? ($dmIdx[$k . '|' . $linkKey] ?? null) : null;
             $st = Sheet::isBlank($m) ? 'waiting' : ($sentRow ? 'sent' : 'ready');
             $status[$st]++;
-            $out[] = [
-                'rowNumber' => $r['row'], 'key' => $k, 'jobUrl' => trim(self::d($c, Sheet::JOB_URL)),
-                'dateFound' => ExcelDate::cellToIso($c[0]) ?? self::d($c, 0),
-                'company' => self::d($c, Sheet::COMPANY), 'jobTitle' => self::d($c, Sheet::JOB_TITLE),
-                'roleGroup' => self::d($c, Sheet::ROLE_GROUP), 'roleSubGroup' => self::d($c, Sheet::ROLE_SUB_GROUP),
-                'companyType' => self::d($c, Sheet::COMPANY_TYPE), 'location' => self::d($c, Sheet::LOCATION),
-                'priorOutreach' => self::d($c, Sheet::PRIOR_OUTREACH), 'notes' => self::d($c, Sheet::NOTES),
-                'verifiedEvidence' => self::d($c, Sheet::VERIFIED_EVIDENCE), 'myComments' => self::d($c, Sheet::MY_COMMENTS),
+            if (!isset($groups[$gk])) {
+                $groups[$gk] = [
+                    'key' => $k, 'jobUrl' => trim(self::d($c, Sheet::JOB_URL)), 'firstRow' => $r['row'],
+                    'dateFound' => ExcelDate::cellToIso($c[0]) ?? self::d($c, 0),
+                    'company' => self::d($c, Sheet::COMPANY), 'jobTitle' => self::d($c, Sheet::JOB_TITLE),
+                    'roleGroup' => self::d($c, Sheet::ROLE_GROUP), 'roleSubGroup' => self::d($c, Sheet::ROLE_SUB_GROUP),
+                    'companyType' => self::d($c, Sheet::COMPANY_TYPE), 'location' => self::d($c, Sheet::LOCATION),
+                    'priorOutreach' => self::d($c, Sheet::PRIOR_OUTREACH), 'notes' => self::d($c, Sheet::NOTES),
+                    'verifiedEvidence' => self::d($c, Sheet::VERIFIED_EVIDENCE), 'myComments' => self::d($c, Sheet::MY_COMMENTS),
+                    'cards' => [], 'sent' => 0,
+                ];
+            }
+            if ($st === 'sent') $groups[$gk]['sent']++;
+            $groups[$gk]['cards'][] = [
+                'row' => $r['row'], 'jobUrl' => trim(self::d($c, Sheet::JOB_URL)),
                 'decisionMakers' => LinkedIn::splitCell($m), 'dmNote' => self::d($c, Sheet::DM_NOTE),
                 'dmName' => self::d($c, Sheet::DM_NAME), 'dmTitle' => self::d($c, Sheet::DM_TITLE),
                 'status' => $st,
                 'sentDate' => $sentRow ? ExcelDate::cellToIso($sentRow['cells'][Sheet::DMT_DATE_VERIFIED] ?? null) : null,
-                'canUndo' => $st === 'sent' && $undoKey === $k && $receipt && $receipt['link'] === LinkedIn::key($m),
-                'duplicate' => $k !== '' && ($counts[$k] ?? 0) > 1,
+                'canUndo' => $st === 'sent' && $receiptOk && $receipt['job'] === $k && $receipt['link'] === $linkKey,
             ];
         }
-        usort($out, fn ($a, $b) => $a['dateFound'] === $b['dateFound'] ? $b['rowNumber'] <=> $a['rowNumber'] : strcmp($b['dateFound'], $a['dateFound']));
+        $jobs = array_values($groups);
+        foreach ($jobs as &$j) $j['total'] = count($j['cards']);
+        unset($j);
+        usort($jobs, fn ($a, $b) => $a['dateFound'] === $b['dateFound'] ? $b['firstRow'] <=> $a['firstRow'] : strcmp($b['dateFound'], $a['dateFound']));
         $warnings = [];
         if (!Sheet::hasDmDetails($verifyRows)) $warnings[] = 'The verify tab\'s S1:U1 headers are not "Decision maker note", "Decision Maker Name", "Decision Maker Title", so those columns are not shown.';
         if ($p = self::dmHeaderProblem($dmRows)) $warnings[] = $p;
-        return ['rows' => $out, 'counts' => $status, 'warnings' => $warnings];
+        return ['jobs' => $jobs, 'counts' => $status, 'warnings' => $warnings];
     }
 
     // ------------------------------------------------------------------ writes
@@ -339,7 +364,10 @@ final class Service
         return null;
     }
 
-    /** Stage 1: Untick, only while M, S, T and U are all empty. */
+    /**
+     * Stage 1: Untick. Allowed only when exactly ONE verify row exists for the job and its M, S, T and U
+     * are all empty. Otherwise: "Has decision makers, edit in Excel".
+     */
     public function untick(mixed $jobUrl, string $user): array
     {
         $key = self::requireKey($jobUrl);
@@ -349,22 +377,19 @@ final class Service
             if (!$m) return ['status' => 'not_ticked', 'row' => null];
             if (count($m) > 1) {
                 $list = implode(', ', array_map(fn ($r) => $r['row'], $m));
-                Audit::write($user, 'untick_refused', $key, Sheet::VERIFY, null, 'refused', "duplicates at rows $list");
-                throw new ConflictError("This job appears more than once in the verify tab (rows $list). Please tidy it up in Excel.");
+                Audit::write($user, 'untick_refused', $key, Sheet::VERIFY, null, 'refused', "several decision-maker rows: $list");
+                throw new ConflictError("Has decision makers, edit in Excel (verify tab rows $list).", 'HAS_DECISION_MAKER');
             }
             $row = $m[0]['row'];
             $withSub = Sheet::hasSubGroup($verifyRows);
             $withDm = Sheet::hasDmDetails($verifyRows);
-            // Raw re-read of A:U (no header filtering): M, S, T and U must all be empty.
+            // Raw re-read of A:U (no header filtering): it must still be this job, with M, S, T and U empty.
             $raw = $this->wb->range(Sheet::VERIFY, "A$row:U$row", $sid)[0] ?? [];
-            if (JobUrl::normalise($raw[Sheet::JOB_URL] ?? null) !== $key) throw new ConflictError('The verify tab changed while removing. Please try again.');
-            $filled = [];
-            foreach ([Sheet::DM_LINKEDIN => 'M', Sheet::DM_NOTE => 'S', Sheet::DM_NAME => 'T', Sheet::DM_TITLE => 'U'] as $col => $letter) {
-                if (!Sheet::isBlank($raw[$col] ?? null)) $filled[] = $letter;
-            }
+            if (JobUrl::normalise($raw[Sheet::JOB_URL] ?? null) !== $key) throw new ConflictError('The sheet changed, please refresh.', 'ROW_CHANGED');
+            $filled = self::mstuFilled($raw);
             if ($filled) {
                 Audit::write($user, 'untick_refused', $key, Sheet::VERIFY, $row, 'refused', 'decision-maker columns filled: ' . implode(',', $filled));
-                throw new ConflictError("Can't untick: row $row of the verify tab already has decision-maker information in column" . (count($filled) > 1 ? 's ' : ' ') . implode(', ', $filled) . '.', 'HAS_DECISION_MAKER');
+                throw new ConflictError('Has decision makers, edit in Excel (verify tab row ' . $row . ', column' . (count($filled) > 1 ? 's ' : ' ') . implode(', ', $filled) . ').', 'HAS_DECISION_MAKER');
             }
             // Remove the whole row width that belongs to the row, so S:U of later rows stay aligned.
             $deleteTo = $withDm ? 'U' : ($withSub ? 'R' : 'Q');
@@ -399,9 +424,51 @@ final class Service
         return ['status' => $was ? 'restored' : 'not_rejected'];
     }
 
-    /** Stage 2: write column M (Decision Maker LinkedIn) of the row with this Job URL. Never S, T or U. */
-    public function saveLinkedIn(mixed $jobUrl, mixed $links, string $user): array
+    // ------------------------------------------------------------------ identified verify rows (stage 2/3)
+
+    private static function requireRow(mixed $row): int
     {
+        if (is_string($row) && ctype_digit($row)) $row = (int) $row;
+        if (!is_int($row) || $row < 2 || $row > 1_000_000) throw new ValidationError('A verify-tab row number is required');
+        return $row;
+    }
+
+    /**
+     * The verify row the browser showed, re-read right now. Refuses when that row no longer holds the same
+     * Job URL (rows moved): "The sheet changed, please refresh". Returns the header-filtered row.
+     */
+    private function identifiedRow(array $verifyRows, int $row, string $key): array
+    {
+        foreach ($verifyRows as $r) {
+            if ($r['row'] === $row) {
+                if (self::key($r) !== $key || !Sheet::isDataRow($r['cells'])) break;
+                return $r;
+            }
+        }
+        throw new ConflictError('The sheet changed, please refresh.', 'ROW_CHANGED');
+    }
+
+    /** Last check immediately before a write: column L of $row must still be this job. */
+    private function confirmRow(string $sid, int $row, string $key): void
+    {
+        $l = $this->wb->range(Sheet::VERIFY, "L$row", $sid);
+        if (JobUrl::normalise($l[0][0] ?? null) !== $key) throw new ConflictError('The sheet changed, please refresh.', 'ROW_CHANGED');
+    }
+
+    /** Another verify row of the same job already holding this person? Returns its row number. */
+    private static function personRow(array $verifyRows, string $key, string $linkKey, ?int $exceptRow = null): ?int
+    {
+        if ($linkKey === '') return null;
+        foreach (self::matches($verifyRows, $key) as $r) {
+            if ($r['row'] !== $exceptRow && LinkedIn::key($r['cells'][Sheet::DM_LINKEDIN] ?? null) === $linkKey) return $r['row'];
+        }
+        return null;
+    }
+
+    /** Stage 2: write column M (Decision Maker LinkedIn) of ONE identified row. Never S, T or U. */
+    public function saveLinkedIn(mixed $row, mixed $jobUrl, mixed $links, string $user): array
+    {
+        $row = self::requireRow($row);
         $key = self::requireKey($jobUrl);
         if (!is_array($links) || array_filter($links, fn ($l) => !is_string($l))) throw new ValidationError('links must be a list of strings');
         $v = LinkedIn::validateList($links);
@@ -409,13 +476,12 @@ final class Service
         if ($v['tooMany']) throw new ValidationError('At most ' . LinkedIn::MAX_LINKS . ' links per row');
         $value = implode("\n", $v['links']);
         $action = $v['links'] ? 'write_decision_maker' : 'clear_decision_maker';
-        return $this->locked(function (string $sid) use ($key, $value, $user, $action, $v) {
-            $m = self::matches($this->readFresh(Sheet::VERIFY, $sid), $key);
-            if (!$m) throw new NotFoundError('That job is no longer in the verify tab');
-            if (count($m) > 1) throw new ConflictError('This job appears more than once in the verify tab (rows ' . implode(', ', array_map(fn ($r) => $r['row'], $m)) . '). Please tidy it up in Excel.');
-            $row = $m[0]['row'];
-            $l = $this->wb->range(Sheet::VERIFY, "L$row", $sid);
-            if (JobUrl::normalise($l[0][0] ?? null) !== $key) throw new ConflictError('The verify tab changed while saving. Please try again.');
+        return $this->locked(function (string $sid) use ($row, $key, $value, $user, $action, $v) {
+            $verifyRows = $this->readFresh(Sheet::VERIFY, $sid);
+            $this->identifiedRow($verifyRows, $row, $key);
+            $other = self::personRow($verifyRows, $key, LinkedIn::key($value), $row);
+            if ($other !== null) throw new ConflictError("That decision maker is already on verify row $other for this job.", 'DUPLICATE_PERSON');
+            $this->confirmRow($sid, $row, $key);
             $this->wb->patchValues(Sheet::VERIFY, "M$row", [[$value]], $sid);
             $this->invalidate(Sheet::VERIFY);
             $back = $this->wb->range(Sheet::VERIFY, "L$row:M$row", $sid)[0] ?? [];
@@ -429,15 +495,58 @@ final class Service
         });
     }
 
-    /** Stage 3: Approve -> append ONE row to "Decision Makers". */
-    public function approve(mixed $jobUrl, array $user): array
+    /**
+     * Stage 2: "+ Add another decision maker". Appends a NEW verify row: A:R copied from the job's first
+     * verify row (A:Q when R1 isn't "Role Sub-Group"), the new link in M, N:Q empty, S/T/U never written.
+     */
+    public function addDecisionMaker(mixed $row, mixed $jobUrl, mixed $link, string $user): array
     {
+        $row = self::requireRow($row);
         $key = self::requireKey($jobUrl);
-        return $this->locked(function (string $sid) use ($key, $user) {
-            $m = self::matches($this->readFresh(Sheet::VERIFY, $sid), $key);
-            if (!$m) throw new NotFoundError('That job is no longer in the verify tab');
-            if (count($m) > 1) throw new ConflictError('This job appears more than once in the verify tab. Please tidy it up in Excel.');
-            $src = $m[0];
+        $r = LinkedIn::normalise(is_string($link) ? $link : '');
+        if (!$r['ok']) throw new ValidationError($r['error']);
+        $url = $r['url'];
+        return $this->locked(function (string $sid) use ($row, $key, $url, $user) {
+            $verifyRows = $this->readFresh(Sheet::VERIFY, $sid);
+            $source = $this->identifiedRow($verifyRows, $row, $key);
+            $jobRows = self::matches($verifyRows, $key);
+            if ($jobRows[0]['row'] !== $row) throw new ConflictError('The sheet changed, please refresh.', 'ROW_CHANGED'); // must be the job's FIRST row
+            $dup = self::personRow($verifyRows, $key, LinkedIn::key($url));
+            if ($dup !== null) {
+                Audit::write($user, 'add_decision_maker_refused', $key, Sheet::VERIFY, $dup, 'refused', 'duplicate job + LinkedIn');
+                throw new ConflictError("That decision maker is already in the verify tab for this job (row $dup).", 'DUPLICATE_PERSON');
+            }
+
+            $withSub = Sheet::hasSubGroup($verifyRows);
+            [$values, $isSerial] = self::appendValues($source['cells'], null, $withSub);
+            $values[Sheet::DM_LINKEDIN] = $url;
+            foreach ([Sheet::PRIOR_OUTREACH, Sheet::NOTES, Sheet::VERIFIED_EVIDENCE, Sheet::MY_COMMENTS] as $col) $values[$col] = ''; // N:Q empty
+            $lastCol = $withSub ? 'R' : 'Q';
+            $target = Sheet::lastValueRow($verifyRows) + 1;
+            $current = $this->wb->range(Sheet::VERIFY, "A$target:U$target", $sid)[0] ?? [];
+            if (!Sheet::isRowBlank($current)) throw new ConflictError("Row $target of the verify tab is not empty. Nothing was written. Please tidy it in Excel and try again.");
+            $this->confirmRow($sid, $row, $key);
+
+            $this->wb->patchValues(Sheet::VERIFY, "A$target:$lastCol$target", [$values], $sid);
+            if ($isSerial) $this->wb->patchNumberFormat(Sheet::VERIFY, "A$target", [['yyyy-mm-dd']], $sid);
+            $this->invalidate(Sheet::VERIFY);
+            $back = $this->wb->range(Sheet::VERIFY, "L$target:M$target", $sid)[0] ?? [];
+            if (JobUrl::normalise($back[0] ?? null) !== $key || LinkedIn::key($back[1] ?? null) !== LinkedIn::key($url)) {
+                Audit::write($user, 'add_decision_maker', $key, Sheet::VERIFY, $target, 'error', 'read-back mismatch');
+                throw new UpstreamError('The row was written but could not be confirmed. Please reload and check.');
+            }
+            Audit::write($user, 'add_decision_maker', $key, Sheet::VERIFY, $target, 'ok', ($withSub ? 'A:R' : 'A:Q') . " copied from row $row");
+            return ['status' => 'appended', 'row' => $target, 'link' => $url];
+        });
+    }
+
+    /** Stage 3: Approve ONE decision maker (one verify row) -> append ONE row to "Decision Makers". */
+    public function approve(mixed $row, mixed $jobUrl, array $user): array
+    {
+        $row = self::requireRow($row);
+        $key = self::requireKey($jobUrl);
+        return $this->locked(function (string $sid) use ($row, $key, $user) {
+            $src = $this->identifiedRow($this->readFresh(Sheet::VERIFY, $sid), $row, $key);
             $c = $src['cells'];
             if (Sheet::isBlank($c[Sheet::DM_LINKEDIN] ?? null)) throw new ValidationError('Add the decision maker\'s LinkedIn (column M) before approving.');
 
@@ -446,6 +555,7 @@ final class Service
                 Audit::write($user['email'], 'approve_refused', $key, Sheet::DECISION_MAKERS, null, 'refused', 'header mismatch');
                 throw new ConflictError($p, 'DM_HEADER_MISMATCH');
             }
+            // Duplicate protection per Job URL + LinkedIn: the same person can't be sent twice for a job.
             $linkKey = LinkedIn::key($c[Sheet::DM_LINKEDIN]);
             $dup = self::dmIndex($dmRows)[$key . '|' . $linkKey] ?? null;
             if ($dup) {
@@ -463,14 +573,14 @@ final class Service
                 $today, $user['name'], $dateFound, $c[Sheet::COMPANY] ?? '', $c[Sheet::DOMAIN] ?? '', $c[Sheet::JOB_TITLE] ?? '',
                 $c[Sheet::ROLE_GROUP] ?? '', $c[Sheet::ROLE_SUB_GROUP] ?? '', $c[Sheet::COMPANY_TYPE] ?? '', $c[Sheet::LOCATION] ?? '',
                 trim(Sheet::display($c[Sheet::JOB_URL] ?? '')), $c[Sheet::DM_LINKEDIN] ?? '', $c[Sheet::DM_NAME] ?? '', $c[Sheet::DM_TITLE] ?? '',
-                'Ready to push', $src['row'], $c[Sheet::DM_NOTE] ?? '',
+                'Ready to push', $row, $c[Sheet::DM_NOTE] ?? '',
             ];
-            $values = array_map(fn ($v) => $v ?? '', $values);
-            $values = array_map(fn ($v) => self::protectText($v), $values); // numbers are left as they are
+            $values = array_map(fn ($v) => self::protectText($v ?? ''), $values); // numbers are left as they are
 
             $target = Sheet::lastValueRow($dmRows, Sheet::DM_TAB_COLS) + 1;
             $current = $this->wb->range(Sheet::DECISION_MAKERS, "A$target:Q$target", $sid)[0] ?? [];
             if (!Sheet::isRowBlank($current)) throw new ConflictError("Row $target of the Decision Makers tab is not empty. Nothing was written.");
+            $this->confirmRow($sid, $row, $key);
 
             $this->wb->patchValues(Sheet::DECISION_MAKERS, "A$target:Q$target", [$values], $sid);
             $this->wb->patchNumberFormat(Sheet::DECISION_MAKERS, "A$target", [['yyyy-mm-dd']], $sid);
@@ -483,33 +593,35 @@ final class Service
                 throw new UpstreamError('The row was written but could not be confirmed. Please reload and check the Decision Makers tab.');
             }
             JsonStore::update($this->receiptFile, [], fn () => ['last' => [
-                'job' => $key, 'link' => $linkKey, 'row' => $target, 'values' => $values, 'by' => $user['email'], 'at' => gmdate('c'),
+                'job' => $key, 'link' => $linkKey, 'sourceRow' => $row, 'row' => $target, 'values' => $values, 'by' => $user['email'], 'at' => gmdate('c'),
             ]]);
-            Audit::write($user['email'], 'approve_append', $key, Sheet::DECISION_MAKERS, $target, 'ok', "source row {$src['row']}");
+            Audit::write($user['email'], 'approve_append', $key, Sheet::DECISION_MAKERS, $target, 'ok', "source row $row");
             return ['status' => 'appended', 'row' => $target, 'sentDate' => ExcelDate::serialToIso($today)];
         });
     }
 
     /** Stage 3 undo: only the row the app just appended, only while it is still last and unchanged. */
-    public function undoApprove(mixed $jobUrl, string $user): array
+    public function undoApprove(mixed $row, mixed $jobUrl, string $user): array
     {
+        $row = self::requireRow($row);
         $key = self::requireKey($jobUrl);
-        return $this->locked(function (string $sid) use ($key, $user) {
+        return $this->locked(function (string $sid) use ($row, $key, $user) {
+            $src = $this->identifiedRow($this->readFresh(Sheet::VERIFY, $sid), $row, $key);
             $receipt = $this->lastReceipt();
-            if (!$receipt || $receipt['job'] !== $key) {
-                throw new ConflictError('Undo is only possible for the row the app added most recently.', 'UNDO_NOT_ALLOWED');
+            if (!$receipt || $receipt['job'] !== $key || $receipt['link'] !== LinkedIn::key($src['cells'][Sheet::DM_LINKEDIN] ?? null)) {
+                throw new ConflictError('Undo is only possible for the decision maker the app added most recently.', 'UNDO_NOT_ALLOWED');
             }
             $dmRows = $this->readFresh(Sheet::DECISION_MAKERS, $sid);
             if (!self::receiptStillValid($receipt, $dmRows)) {
                 Audit::write($user, 'approve_undo_refused', $key, Sheet::DECISION_MAKERS, $receipt['row'], 'refused', 'not last or changed');
                 throw new ConflictError('Can\'t undo: that row is no longer the last row of the Decision Makers tab, or it has been changed.', 'UNDO_NOT_ALLOWED');
             }
-            $row = $receipt['row'];
-            $this->wb->clearContents(Sheet::DECISION_MAKERS, "A$row:Q$row", $sid);
+            $dmRow = $receipt['row'];
+            $this->wb->clearContents(Sheet::DECISION_MAKERS, "A$dmRow:Q$dmRow", $sid);
             $this->invalidate(Sheet::DECISION_MAKERS);
             JsonStore::update($this->receiptFile, [], fn () => []);
-            Audit::write($user, 'approve_undo', $key, Sheet::DECISION_MAKERS, $row, 'ok');
-            return ['status' => 'undone', 'row' => $row];
+            Audit::write($user, 'approve_undo', $key, Sheet::DECISION_MAKERS, $dmRow, 'ok', "source row $row");
+            return ['status' => 'undone', 'row' => $dmRow];
         });
     }
 }

@@ -102,10 +102,11 @@ Use fake data first; nothing touches SharePoint.
    - `/_private/storage/audit.log` (layout B)
 5. **Signals:** tick one card to **verify** it ("Verified: added … (row N)"). Click **Reject** on another; it disappears. Turn on **Show rejected**, then **Undo reject**.
 6. **Signals:** untick the card you verified. It asks, then removes it.
-7. **Verified:** use the filters *Waiting for decision maker*, *Ready to review*, *Sent* and *All*. Cards show the decision maker's LinkedIn (M), name (T), title (U) and note (S).
-8. **Verified:** paste `linkedin.com/in/test-person` into a waiting card and click **Save**. You should see "✓ Saved to master sheet", and the card moves to *Ready to review*. A `linkedin.com/company/...` link is refused.
-9. **Verified:** **✓ Approve → Decision Makers** shows **Sent ✓ <today>**. **Undo** removes that row again, and Approve then works again.
-10. To reset the fake data, delete `storage/mock-workbook.json`.
+7. **Verified:** cards are grouped by job. Each verify-tab row is one decision maker's card, showing their LinkedIn (M), name (T), title (U) and note (S). A job with several people shows e.g. "Sample MSSP BV · Full-stack Developer · 2 decision makers" with "0 of 2 sent". The filters *Waiting for decision maker*, *Ready to review*, *Sent* and *All* count decision-maker cards.
+8. **Verified:** open **Edit LinkedIn (column M)** on a waiting card, paste `linkedin.com/in/test-person` and click **Save**. You should see "✓ Saved to master sheet", and the card moves to *Ready to review*. A `linkedin.com/company/...` link is refused.
+9. **Verified:** on a job with two people, **✓ Approve → Decision Makers** each card separately. The heading goes "1 of 2 sent" → "2 of 2 sent", and each card shows **Sent ✓ <today>**. **Undo** removes the row just added.
+10. **Verified:** **+ Add another decision maker** on a job: paste a new person's LinkedIn and click **Add**. A new card appears (a new verify-tab row). Pasting someone already listed for that job is refused.
+11. To reset the fake data, delete `storage/mock-workbook.json`.
 
 ## 7. Switch to live
 
@@ -132,8 +133,12 @@ The app refuses to start if `APP_ENV=development` points at the master's item id
 | Tab | Allowed writes |
 |---|---|
 | Signals | **never** |
-| Signals to verify decision make | append a row (A:R if R1 = "Role Sub-Group", else A:Q plus a warning); column **M** only; remove an unticked row only while **M, S, T and U** are all empty. **Never S, T or U.** |
-| Decision Makers | append one row (A:Q) after checking the header row; undo only the row the app just added, while it's still last and unchanged |
+| Signals to verify decision make | (a) **Verify**: append a row; (b) **Add another decision maker**: append a row copying A:R from the job's first verify row, with the new link in M and N:Q empty; both A:R if R1 = "Role Sub-Group", else A:Q plus a warning. (c) Column **M** on an identified row. (d) **Untick**: remove the row only when it's the job's **only** verify row and its **M, S, T and U** are empty. **Never S, T or U.** |
+| Decision Makers | append one row (A:Q) per approved decision maker, after checking the header row; the same person is never sent twice for the same job; undo only the row the app just added, while it's still last and unchanged |
+
+**Several decision makers per job:** each person is a separate verify-tab row with the same Job URL, and is reviewed, approved and sent separately. Every action on a card sends its row number **and** Job URL. If rows have moved in Excel since the page loaded, the app refuses with "The sheet changed, please refresh" instead of writing to the wrong row.
+
+**Job URL keys:** LinkedIn job links are matched by their numeric job id. Indeed links by their job key (`jk`). All other sites by the full URL with tracking parameters (`utm_*`, `gclid`, `fbclid`, `trk`, `refId`, `trackingId`…) removed, so different `?id=` jobs stay different.
 | anything else | **never**. Headers are never written. |
 
 Rejections are stored only in `storage/rejections.json`, never in the workbook. **Back up that file** if you move servers. Every write is logged in `storage/audit.log`.

@@ -102,7 +102,7 @@ test('Verify (tick): duplicate protection, formula text kept as text, old-style 
     eq([], $b->writes);
     $s->tick('https://jobs.test/gamma', 'jp');
     eq('=HYPERLINK(evil)', t_row($b, Sheet::VERIFY, 5)[14]);
-    eq('already', $s->tick('https://jobs.test/gamma?x=1', 'jp')['status']);
+    eq('already', $s->tick('https://jobs.test/gamma?utm_campaign=x', 'jp')['status']);
     $s->tick('https://jobs.test/old', 'jp');
     $old = t_row($b, Sheet::VERIFY, 6);
     eq('B - Data & AI', $old[6]);
@@ -142,7 +142,7 @@ test('Untick: removes the row (clear A:R, delete A:U shift up) so S:U of later r
 
 test('Reject: stored app-side keyed by normalised URL, hidden from the list, never written to the workbook', function () {
     [$b, $s, $storage] = t_setup();
-    $r = $s->reject('https://jobs.test/beta/?utm=x', 'jp@swooscale.test');
+    $r = $s->reject('https://jobs.test/beta/?utm_source=x', 'jp@swooscale.test');
     eq('rejected', $r['status']);
     $file = json_decode(file_get_contents("$storage/rejections.json"), true);
     eq(['https://jobs.test/beta'], array_keys($file));
@@ -173,12 +173,12 @@ test('Reject: refused for a verified signal; verifying a rejected signal un-reje
 
 test('LinkedIn save (stage 2): writes column M only, found by Job URL, never S/T/U', function () {
     [$b, $s] = t_setup();
-    $res = $s->saveLinkedIn('https://jobs.test/k-note', ['be.linkedin.com/in/new-person/?trk=1', 'linkedin.com/sales/lead/ABC,NAME'], 'jp');
+    $res = $s->saveLinkedIn(3, 'https://jobs.test/k-note', ['be.linkedin.com/in/new-person/?trk=1', 'linkedin.com/sales/lead/ABC,NAME'], 'jp');
     eq(3, $res['row']);
     eq("https://www.linkedin.com/in/new-person\nhttps://www.linkedin.com/sales/lead/ABC,NAME", $res['value']);
     eq([['patchValues', Sheet::VERIFY, 'M3']], t_writes($b));
     eq('researching', t_row($b, Sheet::VERIFY, 3)[18], 'S untouched');
-    throws(fn () => $s->saveLinkedIn('https://jobs.test/k-note', ['https://www.linkedin.com/company/acme'], 'jp'), ValidationError::class);
-    throws(fn () => $s->saveLinkedIn('https://jobs.test/k-note', 'nope', 'jp'), ValidationError::class);
+    throws(fn () => $s->saveLinkedIn(3, 'https://jobs.test/k-note', ['https://www.linkedin.com/company/acme'], 'jp'), ValidationError::class);
+    throws(fn () => $s->saveLinkedIn(3, 'https://jobs.test/k-note', 'nope', 'jp'), ValidationError::class);
     eq(1, count($b->writes));
 });

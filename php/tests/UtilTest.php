@@ -34,13 +34,38 @@ test('Excel dates: any cell shape', function () {
     eq(ExcelDate::isoToSerial((new DateTimeImmutable('now', new DateTimeZone('Europe/Brussels')))->format('Y-m-d')), ExcelDate::todaySerial('Europe/Brussels'));
 });
 
-test('Job URL normalisation: trim, query, fragment, slash, host case, identity params', function () {
-    eq('https://jobs.example.com/acme/123', JobUrl::normalise('  https://Jobs.Example.com/acme/123/?utm=x#apply '));
+test('Job URL normalisation: trim, fragment, slash, host case; tracking params dropped', function () {
+    eq('https://jobs.example.com/acme/123', JobUrl::normalise('  https://Jobs.Example.com/acme/123/?utm_source=x&utm_medium=y#apply '));
     eq('https://x.com/Jobs/ABC', JobUrl::normalise('https://x.com/Jobs/ABC'));
-    eq('https://be.indeed.com/viewjob?jk=abc', JobUrl::normalise('https://be.indeed.com/viewjob?from=serp&jk=abc'));
-    ok(JobUrl::normalise('https://be.indeed.com/viewjob?jk=a') !== JobUrl::normalise('https://be.indeed.com/viewjob?jk=b'));
+    eq('https://x.com/job?a=1&b=2', JobUrl::normalise('https://x.com/job?b=2&gclid=zz&a=1&fbclid=yy&trk=t&refId=r&trackingId=q'), 'sorted, tracking dropped');
     eq('', JobUrl::normalise(null));
     eq('', JobUrl::normalise('   '));
+});
+
+test('Job URL normalisation: talent.com ?id= values stay different jobs', function () {
+    $a = JobUrl::normalise('https://be.talent.com/view?id=634735404347819824');
+    $b = JobUrl::normalise('https://be.talent.com/view?id=638170805972572162');
+    eq('https://be.talent.com/view?id=634735404347819824', $a);
+    ok($a !== $b, 'different talent.com jobs must not collide');
+    eq($a, JobUrl::normalise('https://be.talent.com/view?utm_source=feed&id=634735404347819824&utm_campaign=x'));
+});
+
+test('Job URL normalisation: Indeed keeps only the job key', function () {
+    eq('https://be.indeed.com/viewjob?jk=abc', JobUrl::normalise('https://be.indeed.com/viewjob?from=serp&jk=abc&vjs=3'));
+    ok(JobUrl::normalise('https://be.indeed.com/viewjob?jk=a') !== JobUrl::normalise('https://be.indeed.com/viewjob?jk=b'));
+});
+
+test('Job URL normalisation: careers page ?jobId= is kept; utm params are not', function () {
+    eq('https://careers.acme.test/apply?jobId=4471', JobUrl::normalise('https://careers.acme.test/apply/?jobId=4471&utm_source=linkedin&utm_medium=jobs'));
+    ok(JobUrl::normalise('https://careers.acme.test/apply?jobId=4471') !== JobUrl::normalise('https://careers.acme.test/apply?jobId=4472'));
+});
+
+test('Job URL normalisation: LinkedIn job links reduce to the numeric job id', function () {
+    $k = 'https://www.linkedin.com/jobs/view/4359223279';
+    eq($k, JobUrl::normalise('https://www.linkedin.com/jobs/view/4359223279/'));
+    eq($k, JobUrl::normalise('https://be.linkedin.com/jobs/view/commerce-architect-at-unilin-4359223279?trk=public_jobs&refId=abc'));
+    eq($k, JobUrl::normalise('https://www.linkedin.com/jobs/search/?currentJobId=4359223279&keywords=architect'));
+    ok($k !== JobUrl::normalise('https://www.linkedin.com/jobs/view/4472653388/'));
 });
 
 test('LinkedIn validation: /in/ and /sales/ only, normalised', function () {

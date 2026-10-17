@@ -61,10 +61,21 @@ final class ExcelDate
 
 final class JobUrl
 {
-    /** Query parameters that ARE the job's identity on some boards; everything else is stripped. */
-    public const IDENTITY_PARAMS = ['jk', 'vjk', 'currentjobid', 'gh_jid', 'jobid', 'job_id'];
+    /** Tracking parameters dropped from every non-LinkedIn URL (plus anything starting with utm_). */
+    public const TRACKING_PARAMS = [
+        'gclid', 'gclsrc', 'dclid', 'fbclid', 'msclkid', 'yclid', 'gbraid', 'wbraid', 'igshid', 'mc_cid', 'mc_eid',
+        '_hsenc', '_hsmi', '_ga', '_gl', 'trk', 'trkinfo', 'refid', 'trackingid', 'originalsubdomain',
+    ];
+    /** Indeed: only the job key identifies the job (from=, vjs=, advn=… are navigation noise). */
+    private const INDEED_IDENTITY = ['jk', 'vjk'];
 
-    /** Normalised Job URL key: trim, drop #fragment and query (except identity params), trailing slashes; lower-case scheme+host. */
+    /**
+     * Normalised Job URL key (the row identity).
+     *  - LinkedIn job links -> https://www.linkedin.com/jobs/view/<numeric job id> (from the path or currentJobId).
+     *  - Indeed -> path + jk/vjk only.
+     *  - Everything else -> path + query WITHOUT tracking parameters, sorted (different ?id= values stay different jobs).
+     * Always: trim, drop #fragment and trailing slashes, lower-case scheme + host.
+     */
     public static function normalise(mixed $raw): string
     {
         if ($raw === null) return '';
@@ -80,11 +91,34 @@ final class JobUrl
         }
         $s = rtrim($s, '/');
         $s = preg_replace_callback('~^([a-z][a-z0-9+.\-]*://)([^/]+)~i', fn ($m) => strtolower($m[1]) . strtolower($m[2]), $s) ?? $s;
+        $host = strtolower((string) parse_url($s, PHP_URL_HOST));
+        $path = (string) parse_url($s, PHP_URL_PATH);
+        $pairs = array_values(array_filter(explode('&', $query), fn ($p) => $p !== ''));
+        $param = function (string $name) use ($pairs): ?string {
+            foreach ($pairs as $p) {
+                [$k, $v] = array_pad(explode('=', $p, 2), 2, '');
+                if (strtolower($k) === $name) return $v;
+            }
+            return null;
+        };
+
+        if (preg_match('/(^|\.)linkedin\.com$/', $host)) {
+            if (preg_match('~^/jobs/view/(?:[^/]*?-)?(\d+)$~', $path, $m)) return 'https://www.linkedin.com/jobs/view/' . $m[1];
+            $cur = $param('currentjobid');
+            if ($cur !== null && ctype_digit($cur)) return 'https://www.linkedin.com/jobs/view/' . $cur;
+            return $s; // other LinkedIn URLs: no query
+        }
+
+        $isIndeed = (bool) preg_match('/(^|\.)indeed\.[a-z.]+$/', $host);
         $kept = [];
-        foreach (explode('&', $query) as $p) {
-            if ($p === '') continue;
+        foreach ($pairs as $p) {
             $name = strtolower(explode('=', $p, 2)[0]);
-            if (in_array($name, self::IDENTITY_PARAMS, true)) $kept[] = $p;
+            if ($isIndeed) {
+                if (in_array($name, self::INDEED_IDENTITY, true)) $kept[] = $p;
+                continue;
+            }
+            if (str_starts_with($name, 'utm_') || in_array($name, self::TRACKING_PARAMS, true)) continue;
+            $kept[] = $p;
         }
         sort($kept);
         return $kept ? $s . '?' . implode('&', $kept) : $s;

@@ -54,6 +54,15 @@
   opacity: 0.6;
 }
 
+/* One decision maker (one verify-tab row) inside a job group. */
+.sd-dm-card {
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  background: var(--color-card-2, #2d1849);
+}
+
 .sd-date-heading {
   position: sticky;
   top: 6.25rem;

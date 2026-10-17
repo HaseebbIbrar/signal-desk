@@ -1,13 +1,20 @@
 <?php
 // The single write gate. Every backend write method calls Guard::assert() before doing anything.
 //
+// The verify tab allows exactly four kinds of write (the Service enforces the business rules;
+// this gate enforces the cells):
+//   (a) Verify a signal                 -> row append      values A{r}:Q{r} | A{r}:R{r}, format A{r}
+//   (b) Add another decision maker      -> row append      values A{r}:Q{r} | A{r}:R{r}, format A{r}
+//       (A:R copied from the job's first verify row, new link in M, N:Q empty)
+//   (c) Decision Maker LinkedIn         -> one cell        values M{r} on an identified row
+//   (d) Untick (one row, M/S/T/U empty)  -> removal         clear A{r}:Q{r} | A{r}:R{r}, delete A{r}:{Q|R|U}{r}
+//
 //   Signals                         : never written.
-//   Signals to verify decision make : values  A{r}:Q{r} | A{r}:R{r}   (row append)
-//                                             M{r}                     (Decision Maker LinkedIn)
-//                                     format  A{r}                     (date format of an appended row)
-//                                     clear   A{r}:Q{r} | A{r}:R{r}   (untick, before the delete)
-//                                     delete  A{r}:Q{r} | A{r}:R{r} | A{r}:U{r}   (untick, shift up)
-//                                     => S, T and U are never written with a value.
+//   Signals to verify decision make : values  A{r}:Q{r} | A{r}:R{r} | M{r}
+//                                     format  A{r}
+//                                     clear   A{r}:Q{r} | A{r}:R{r}
+//                                     delete  A{r}:Q{r} | A{r}:R{r} | A{r}:U{r}
+//                                     => S, T and U (and N:Q on their own) are never written with a value.
 //   Decision Makers                 : values  A{r}:Q{r}  (row append)
 //                                     format  A{r} | C{r} (Date Verified / Date Found)
 //                                     clear   A{r}:Q{r}  (undo of the app's own last row)

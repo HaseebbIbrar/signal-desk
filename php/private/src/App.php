@@ -151,14 +151,16 @@ final class App
             if (!is_array($body)) throw new ValidationError('Invalid JSON');
             $s = $this->service();
             $job = $body['jobUrl'] ?? null;
+            $row = $body['row'] ?? null; // Verified-page writes identify the card by row number + Job URL
             $data = match ($route) {
                 'tick' => $s->tick($job, $user['email']),
                 'untick' => $s->untick($job, $user['email']),
                 'reject' => $s->reject($job, $user['email']),
                 'unreject' => $s->unreject($job, $user['email']),
-                'linkedin' => $s->saveLinkedIn($job, $body['links'] ?? null, $user['email']),
-                'approve' => $s->approve($job, $user),
-                'undo-approve' => $s->undoApprove($job, $user['email']),
+                'linkedin' => $s->saveLinkedIn($row, $job, $body['links'] ?? null, $user['email']),
+                'add-decision-maker' => $s->addDecisionMaker($row, $job, $body['link'] ?? null, $user['email']),
+                'approve' => $s->approve($row, $job, $user),
+                'undo-approve' => $s->undoApprove($row, $job, $user['email']),
                 default => throw new NotFoundError('Unknown API route'),
             };
             $this->json($data);
