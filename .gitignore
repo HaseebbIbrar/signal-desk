@@ -15,3 +15,8 @@ next-env.d.ts
 # Build safety net (scripts/sg-prepare-build.cjs) and Next.js dev-server output
 .sg-removed/
 AGENTS.md
+
+# PHP version: real config and runtime storage never go into git or the zip
+php/private/config.php
+php/private/storage/*
+!php/private/storage/.htaccess

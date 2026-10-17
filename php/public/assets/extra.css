@@ -1,0 +1,92 @@
+/* Styles for elements the PHP version adds (Reject / Approve / Sent / Undo). app.css is the compiled
+   Tailwind CSS from the Next.js app, unchanged; its theme variables (--color-*) are reused here. */
+
+.sd-btn-reject,
+.sd-btn-secondary {
+  border: 1px solid var(--color-line, #4a2a73);
+  border-radius: 0.75rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8125rem;
+  color: rgb(255 255 255 / 0.8);
+  background: transparent;
+  cursor: pointer;
+}
+.sd-btn-reject:hover {
+  border-color: var(--color-bad, #ff6b81);
+  color: var(--color-bad, #ff6b81);
+}
+.sd-btn-secondary:hover {
+  border-color: var(--color-pink, #e337ad);
+  color: #fff;
+}
+.sd-btn-reject:disabled,
+.sd-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sd-btn-approve {
+  width: 100%;
+  border: 0;
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  color: #0d0717;
+  background: var(--color-ok, #3ddc97);
+  cursor: pointer;
+}
+.sd-btn-approve:hover {
+  filter: brightness(1.08);
+}
+
+.sd-sent {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgb(61 220 151 / 0.6);
+  border-radius: 9999px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-ok, #3ddc97);
+}
+
+.sd-rejected {
+  opacity: 0.6;
+}
+
+.sd-date-heading {
+  position: sticky;
+  top: 6.25rem;
+  z-index: 10;
+  margin: 0 -0.25rem;
+  border-radius: 0.5rem;
+  background: rgb(0 0 0 / 0.6);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgb(255 255 255 / 0.7);
+  backdrop-filter: blur(8px);
+}
+
+@media (min-width: 640px) {
+  .sd-btn-approve {
+    width: auto;
+  }
+}
+
+/* Utility classes the PHP views use that the Next.js app never did (so they aren't in app.css).
+   Same values as Tailwind's defaults. */
+.border-ok\/60 { border-color: rgb(61 220 151 / 0.6); }
+.break-all { word-break: break-all; }
+.gap-x-5 { column-gap: 1.25rem; }
+.gap-y-2 { row-gap: 0.5rem; }
+.max-w-lg { max-width: 32rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-3 { margin-bottom: 0.75rem; }
+.mt-4 { margin-top: 1rem; }
+.pr-3 { padding-right: 0.75rem; }
+.py-6 { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+.space-y-1 > :not(:last-child) { margin-bottom: 0.25rem; }
+.text-left { text-align: left; }

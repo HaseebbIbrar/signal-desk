@@ -1,0 +1,8 @@
+# Private folder (config.php, src/, storage/). Must never be served over HTTP.
+# Layout A keeps this folder outside the web root; this file is the safety net for layout B
+# (uploaded as _private/ inside the web root) or a misplaced upload.
+Require all denied
+Options -Indexes
+<IfModule mod_php.c>
+  php_flag engine off
+</IfModule>
