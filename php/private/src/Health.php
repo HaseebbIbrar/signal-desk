@@ -117,7 +117,7 @@ final class Health
         $warn = count(array_filter($checks, fn ($c) => $c[1] === 'WARN'));
         $summary = $fail ? "<p class=\"mb-3 text-bad\">$fail check(s) failed.</p>" : '<p class="mb-3 text-ok">All required checks passed.</p>';
         if ($warn) $summary .= "<p class=\"mb-3 text-warn\">$warn check(s) could not be verified (WARN): see the details and check them manually.</p>";
-        return '<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Health · Signal Desk</title><link rel="stylesheet" href="/assets/app.css"><link rel="stylesheet" href="/assets/extra.css"></head>'
+        return '<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Health · Signal Desk</title>' . Views::styles() . '</head>'
             . '<body class="antialiased"><main class="mx-auto max-w-3xl px-4 py-6"><h1 class="mb-2 text-lg font-semibold">Signal Desk health</h1>' . $summary
             . '<table class="w-full text-left text-sm">' . $rows . '</table><p class="mt-4 text-sm"><a class="text-pink-soft underline" href="/signals">Back to Signals</a></p></main></body></html>';
     }

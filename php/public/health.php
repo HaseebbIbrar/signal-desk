@@ -2,6 +2,7 @@
 // /health.php: login-protected setup check. Confirms config and storage are NOT reachable over HTTP.
 declare(strict_types=1);
 
+define('SD_PUBLIC_DIR', __DIR__); // App::asset() fallback when DOCUMENT_ROOT isn't this folder
 [$privateDir, $layout] = require __DIR__ . '/locate.inc.php';
 if ($privateDir === null) {
     http_response_code(500);

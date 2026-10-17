@@ -9,7 +9,39 @@ final class App
     private const MAX_BODY = 20000;
     private ?Service $service = null;
 
-    public function __construct(private array $config, private string $assetsVersion = '1') {}
+    /** Version used when an asset's modification time can't be read (keeps the URL valid). */
+    public const ASSET_FALLBACK_VERSION = '1';
+
+    public function __construct(private array $config) {}
+
+    /**
+     * Cache-busting asset URL: /assets/<file>?v=<filemtime>. 20i's StackCDN caches /assets/* hard, so a
+     * new upload gets a new URL and browsers fetch the new file. The file is looked up under
+     * DOCUMENT_ROOT/assets, then under the public folder (SD_PUBLIC_DIR, set by index.php/health.php),
+     * and if neither works the version falls back to ASSET_FALLBACK_VERSION.
+     */
+    public static function asset(string $file): string
+    {
+        if (!preg_match('/^[A-Za-z0-9._-]+$/', $file) || str_contains($file, '..')) {
+            throw new \InvalidArgumentException("Invalid asset name: $file");
+        }
+        $roots = [];
+        if (!empty($_SERVER['DOCUMENT_ROOT'])) $roots[] = rtrim((string) $_SERVER['DOCUMENT_ROOT'], '/\\');
+        if (defined('SD_PUBLIC_DIR')) $roots[] = rtrim((string) constant('SD_PUBLIC_DIR'), '/\\');
+        $version = self::ASSET_FALLBACK_VERSION;
+        foreach ($roots as $root) {
+            $path = $root . '/assets/' . $file;
+            if (is_file($path)) {
+                clearstatcache(true, $path);
+                $mtime = @filemtime($path);
+                if ($mtime) {
+                    $version = (string) $mtime;
+                    break;
+                }
+            }
+        }
+        return '/assets/' . $file . '?v=' . $version;
+    }
 
     public static function isHttps(): bool
     {
@@ -199,11 +231,17 @@ final class Views
         return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
+    /** <link> tags for the stylesheets, with cache-busting ?v=<filemtime> (see App::asset). */
+    public static function styles(): string
+    {
+        return '<link rel="stylesheet" href="' . self::e(App::asset('app.css')) . '"><link rel="stylesheet" href="' . self::e(App::asset('extra.css')) . '">';
+    }
+
     private static function head(string $title): string
     {
         return '<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             . '<meta name="robots" content="noindex, nofollow"><meta name="theme-color" content="#1a0d2e">'
-            . '<title>' . self::e($title) . '</title><link rel="stylesheet" href="/assets/app.css"><link rel="stylesheet" href="/assets/extra.css"></head>';
+            . '<title>' . self::e($title) . '</title>' . Views::styles() . '</head>';
     }
 
     private static function banner(array $config): string
@@ -244,7 +282,7 @@ final class Views
             . '<form method="post" action="/logout"><input type="hidden" name="csrf" value="' . self::e($csrf) . '"><button type="submit" class="rounded-lg border border-line px-3 py-1.5 text-white/80 hover:border-pink hover:text-white">Log out</button></form></div></div>'
             . '<nav class="mx-auto flex max-w-3xl gap-1 px-3 sm:px-4" aria-label="Main">' . $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . '</nav></header>'
             . '<main id="app" class="mx-auto max-w-3xl px-3 pb-16 pt-4 sm:px-4"><p class="flex items-center gap-2 text-sm text-white/70"><span class="sd-spinner"></span> Reading the master sheet…</p></main>'
-            . '</div><script src="/assets/app.js" defer></script></body></html>';
+            . '</div><script src="' . self::e(App::asset('app.js')) . '" defer></script></body></html>';
     }
 
     public static function notFound(): string
@@ -254,7 +292,7 @@ final class Views
 
     public static function setupError(string $message): string
     {
-        return '<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>Signal Desk: setup needed</title><link rel="stylesheet" href="/assets/app.css"><link rel="stylesheet" href="/assets/extra.css"></head>'
+        return '<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>Signal Desk: setup needed</title>' . Views::styles() . '</head>'
             . '<body class="antialiased"><main class="flex min-h-dvh items-center justify-center px-4"><div class="w-full max-w-lg rounded-2xl border border-line bg-card p-6">'
             . '<h1 class="mb-3 text-lg font-semibold">Signal Desk: setup needed</h1><p class="text-sm text-white/80">' . self::e($message) . '</p>'
             . '<p class="mt-3 text-sm text-white/60">See php/DEPLOY-20I.md.</p></div></main></body></html>';

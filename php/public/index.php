@@ -13,6 +13,7 @@ if (PHP_SAPI === 'cli-server') {
     }
 }
 
+define('SD_PUBLIC_DIR', __DIR__); // App::asset() fallback when DOCUMENT_ROOT isn't this folder
 [$privateDir] = require __DIR__ . '/locate.inc.php';
 if ($privateDir === null) {
     http_response_code(500);
