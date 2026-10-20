@@ -1,0 +1,647 @@
+{
+  "_help": [
+    "Signal Desk: which Atlas candidate lists (families) match a signal. Edit storage/atlas-list-map.json (a copy of this file) or use the /lists page; never this default.",
+    "Each family has its lists (Permanent, Freelance, or other types such as Contract), matched by id. New Atlas lists are added automatically at most once an hour: to the family with the same name, or as a new family marked \"auto\": true, \"reviewed\": false. A list deleted in Atlas is marked \"status\": \"missing\" and left out of the counts.",
+    "Matching order for a signal: 1) roleSubGroups (exact value from column R, or just its code like \"A2\"), 2) keywords found in the job title (whole words), 3) roleGroups (column G). The first rule that matches anything decides; several families can match.",
+    "Keywords are lower-case phrases matched as whole words in the normalised title (gender markers like (m/f/x) and seniority words are removed first)."
+  ],
+  "version": 2,
+  "seniorityWords": [
+    "senior",
+    "sr",
+    "junior",
+    "jr",
+    "medior",
+    "mid",
+    "mid-level",
+    "experienced",
+    "expert",
+    "trainee",
+    "intern",
+    "graduate",
+    "entry-level",
+    "starter"
+  ],
+  "ignoredLists": [
+    {
+      "id": "3531a250-5986-4446-828b-ebcef7545aa5",
+      "name": "To verify – Belgian eligibility"
+    }
+  ],
+  "families": {
+    "Microsoft – Azure Cloud Architects": {
+      "lists": [
+        {
+          "id": "03dee41f-a34d-4b9d-8a5b-8f6c320f2952",
+          "name": "Microsoft – Azure Cloud Architects – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "dcd8d9a5-71a9-4478-9108-eaf021920d14",
+          "name": "Microsoft – Azure Cloud Architects – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "G3"
+      ],
+      "keywords": [
+        "azure architect",
+        "azure cloud architect",
+        "azure solution architect",
+        "cloud architect"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – Azure AI / GenAI Engineers": {
+      "lists": [
+        {
+          "id": "7ca542ae-70c7-4fcb-962a-1cf54121565d",
+          "name": "Microsoft – Azure AI / GenAI Engineers – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "8e30a31e-a7fe-41b3-9a98-0def382221ed",
+          "name": "Microsoft – Azure AI / GenAI Engineers – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "I2",
+        "I3",
+        "I4"
+      ],
+      "keywords": [
+        "ai engineer",
+        "genai",
+        "gen ai",
+        "generative ai",
+        "llm",
+        "machine learning engineer",
+        "ml engineer",
+        "mlops",
+        "azure ai",
+        "openai",
+        "copilot"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – .NET / C# Developers": {
+      "lists": [
+        {
+          "id": "5a610946-9a50-47fe-b4d8-703a60ed7464",
+          "name": "Microsoft – .NET / C# Developers – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "545a5fec-16a9-4e59-a44c-ac9fe8f9f5f2",
+          "name": "Microsoft – .NET / C# Developers – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [],
+      "keywords": [
+        ".net",
+        "dotnet",
+        "c#",
+        "asp.net",
+        "blazor"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – Azure Cloud / DevOps / Platform Engineers": {
+      "lists": [
+        {
+          "id": "bf34dabd-508f-404f-9a7c-c26d801f7094",
+          "name": "Microsoft – Azure Cloud / DevOps / Platform Engineers – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "851fd7c2-ff72-4919-a739-5d5cade6221b",
+          "name": "Microsoft – Azure Cloud / DevOps / Platform Engineers – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "D1",
+        "D2"
+      ],
+      "keywords": [
+        "devops",
+        "platform engineer",
+        "site reliability",
+        "sre",
+        "kubernetes",
+        "azure engineer",
+        "cloud engineer"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – Data Architects": {
+      "lists": [
+        {
+          "id": "64780d3f-21f2-467f-9d72-8ce684f1f38f",
+          "name": "Microsoft – Data Architects – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "1b150554-7f9c-4450-99fb-6453308162ec",
+          "name": "Microsoft – Data Architects – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "G4"
+      ],
+      "keywords": [
+        "data architect"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – Data Engineers": {
+      "lists": [
+        {
+          "id": "dc025710-5671-4a5a-b7bf-97e057275703",
+          "name": "Microsoft – Data Engineers – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "62da2a05-6463-439f-a13b-8481b489133e",
+          "name": "Microsoft – Data Engineers – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "B1"
+      ],
+      "keywords": [
+        "data engineer",
+        "databricks",
+        "microsoft fabric",
+        "synapse"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – Cloud, Infra & Solution Architects": {
+      "lists": [
+        {
+          "id": "3baf2288-e5f7-433f-a962-7cc9bc37d300",
+          "name": "Microsoft – Cloud, Infra & Solution Architects – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "17335169-1e17-4410-80bf-99ca5a3d3a00",
+          "name": "Microsoft – Cloud, Infra & Solution Architects – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "G3"
+      ],
+      "keywords": [
+        "infrastructure architect",
+        "infra architect",
+        "solution architect",
+        "cloud architect"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – Security Architects": {
+      "lists": [
+        {
+          "id": "d9e64280-c692-4f7a-bf1c-dc501a21e6cf",
+          "name": "Microsoft – Security Architects – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "36630721-94c0-4528-862b-fbd780b12af4",
+          "name": "Microsoft – Security Architects – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "G6"
+      ],
+      "keywords": [
+        "security architect",
+        "cyber architect"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – System & Infra Engineers / Admins": {
+      "lists": [
+        {
+          "id": "0f2a39f9-15d3-4721-aa3d-0a99be3b1fd8",
+          "name": "Microsoft – System & Infra Engineers / Admins – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "8e2adc34-778f-4d2e-984c-f87161d0d07e",
+          "name": "Microsoft – System & Infra Engineers / Admins – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "E2",
+        "K3"
+      ],
+      "keywords": [
+        "system engineer",
+        "systems engineer",
+        "system administrator",
+        "systems administrator",
+        "sysadmin",
+        "m365",
+        "microsoft 365",
+        "intune",
+        "active directory",
+        "windows server",
+        "modern workplace"
+      ],
+      "roleGroups": []
+    },
+    "Microsoft – Security Engineers & Analysts": {
+      "lists": [
+        {
+          "id": "1bd175b2-5709-42ac-ae6d-66b16bd6f143",
+          "name": "Microsoft – Security Engineers & Analysts – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "7012da86-702a-4732-b117-e8a679e12cbf",
+          "name": "Microsoft – Security Engineers & Analysts – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "A8",
+        "A9"
+      ],
+      "keywords": [
+        "security engineer",
+        "security analyst",
+        "sentinel",
+        "defender"
+      ],
+      "roleGroups": []
+    },
+    "Other / Management & Founders": {
+      "lists": [
+        {
+          "id": "466ca8be-fe1a-4e51-b742-11f1004bba4c",
+          "name": "Other / Management & Founders – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "2dc2ae5c-4167-40ec-8509-beb65f7bc75e",
+          "name": "Other / Management & Founders – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "K6",
+        "C6",
+        "F3"
+      ],
+      "keywords": [
+        "head of it",
+        "it manager",
+        "it director",
+        "cto",
+        "cio",
+        "chief technology officer",
+        "chief information officer",
+        "founder",
+        "co-founder",
+        "managing director",
+        "engineering manager",
+        "vp engineering"
+      ],
+      "roleGroups": []
+    },
+    "Infrastructure, Network & Cloud Engineers": {
+      "lists": [
+        {
+          "id": "be9910b1-acbe-4ae1-a7f8-fed5fbcb3c07",
+          "name": "Infrastructure, Network & Cloud Engineers – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "46528007-4eb8-4984-882c-d316f0f27fc6",
+          "name": "Infrastructure, Network & Cloud Engineers – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "E1",
+        "E2",
+        "D1"
+      ],
+      "keywords": [
+        "network engineer",
+        "network administrator",
+        "infrastructure engineer",
+        "cloud engineer",
+        "system engineer",
+        "systems engineer",
+        "datacenter",
+        "data center",
+        "telecom engineer"
+      ],
+      "roleGroups": []
+    },
+    "Cyber Security Consultants": {
+      "lists": [
+        {
+          "id": "7f4e3149-b8ff-4a82-8cfb-9b5fd7b749ea",
+          "name": "Cyber Security Consultants – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "40fb9a33-fc17-4363-9f01-681bf07cf31d",
+          "name": "Cyber Security Consultants – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "A9"
+      ],
+      "keywords": [
+        "security consultant",
+        "cyber security consultant",
+        "cybersecurity consultant",
+        "cyber consultant"
+      ],
+      "roleGroups": []
+    },
+    "Research & Academia": {
+      "lists": [
+        {
+          "id": "27448d03-2a44-4d08-9077-672125d9b687",
+          "name": "Research & Academia – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "9132c781-3afc-450d-9d64-41c0e2f8535a",
+          "name": "Research & Academia – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [],
+      "keywords": [
+        "researcher",
+        "research engineer",
+        "research scientist",
+        "phd",
+        "postdoc",
+        "professor",
+        "lecturer"
+      ],
+      "roleGroups": []
+    },
+    "Security and Network security Engineers": {
+      "lists": [
+        {
+          "id": "7ccefa28-f440-4946-9a4c-6be92b3bd051",
+          "name": "Security and Network security Engineers – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "0ad66564-f901-442b-9257-9b0ff68a5bd9",
+          "name": "Security and Network security Engineers – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "A8",
+        "A6"
+      ],
+      "keywords": [
+        "security engineer",
+        "network security",
+        "firewall",
+        "ot security",
+        "ics security"
+      ],
+      "roleGroups": []
+    },
+    "Solution, Software & Platform Architects": {
+      "lists": [
+        {
+          "id": "274c56fe-274e-4abe-ac35-00e403deebf4",
+          "name": "Solution, Software & Platform Architects – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "0b3a385b-a416-48c1-8f8c-51d29b8c5cec",
+          "name": "Solution, Software & Platform Architects – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "G1",
+        "G2"
+      ],
+      "keywords": [
+        "solution architect",
+        "software architect",
+        "platform architect",
+        "enterprise architect",
+        "technical architect",
+        "domain architect"
+      ],
+      "roleGroups": []
+    },
+    "Security Architects": {
+      "lists": [
+        {
+          "id": "9e7267c4-e0df-4bcc-8ca0-586bcc44bd6c",
+          "name": "Security Architects – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "7056a36b-324b-4e70-a3a4-83e3d0c246a0",
+          "name": "Security Architects – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "G6"
+      ],
+      "keywords": [
+        "security architect",
+        "cyber architect"
+      ],
+      "roleGroups": []
+    },
+    "IAM Specialists": {
+      "lists": [
+        {
+          "id": "5259d023-9d9b-48f9-bc4c-c8483edb6ca5",
+          "name": "IAM Specialists – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "a4b2c2ca-c4d8-41ac-b6ae-9ce576ef5a80",
+          "name": "IAM Specialists – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "A4"
+      ],
+      "keywords": [
+        "iam",
+        "access management",
+        "pam",
+        "privileged access",
+        "sailpoint",
+        "cyberark",
+        "okta",
+        "identity and access",
+        "identity engineer",
+        "identity architect"
+      ],
+      "roleGroups": []
+    },
+    "GRC, Risk & Compliance": {
+      "lists": [
+        {
+          "id": "ca64288a-7a8c-458c-9791-cef2e5315213",
+          "name": "GRC, Risk & Compliance – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "f8122251-1d85-4537-aded-bf3744063aad",
+          "name": "GRC, Risk & Compliance – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "A5"
+      ],
+      "keywords": [
+        "grc",
+        "iso 27001",
+        "information security officer",
+        "dpo",
+        "privacy",
+        "nis2",
+        "dora",
+        "it risk",
+        "cyber risk",
+        "security risk",
+        "it audit",
+        "it auditor",
+        "security compliance"
+      ],
+      "roleGroups": []
+    },
+    "Offensive Security & Pentest": {
+      "lists": [
+        {
+          "id": "20d309ec-972b-4b83-b802-9e32d3917382",
+          "name": "Offensive Security & Pentest – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "8e7d371e-4c84-4ff1-a54d-5b1d269e459d",
+          "name": "Offensive Security & Pentest – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "A2"
+      ],
+      "keywords": [
+        "pentest",
+        "pentester",
+        "penetration",
+        "red team",
+        "offensive security",
+        "ethical hacker",
+        "appsec",
+        "application security"
+      ],
+      "roleGroups": []
+    },
+    "SOC & Incident Response": {
+      "lists": [
+        {
+          "id": "872f764f-ef13-40f4-8cfb-101c90937a54",
+          "name": "SOC & Incident Response – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "55566782-95be-4248-b097-3b65e6442532",
+          "name": "SOC & Incident Response – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "A1"
+      ],
+      "keywords": [
+        "soc",
+        "incident response",
+        "incident responder",
+        "threat hunter",
+        "threat intelligence",
+        "detection engineer",
+        "blue team",
+        "dfir",
+        "forensic"
+      ],
+      "roleGroups": []
+    },
+    "Cyber Range & Simulation": {
+      "lists": [
+        {
+          "id": "6ba8b284-7e6b-4ec0-a3c8-c5bf2a5b7863",
+          "name": "Cyber Range & Simulation – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "8ed3ac84-ecef-4da3-87ed-4614dd082c17",
+          "name": "Cyber Range & Simulation – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [],
+      "keywords": [
+        "cyber range",
+        "cyber exercise",
+        "cyber simulation",
+        "attack simulation"
+      ],
+      "roleGroups": []
+    },
+    "CISO & Security Leadership": {
+      "lists": [
+        {
+          "id": "6cde8de8-39cc-4e61-badc-c9874d54c087",
+          "name": "CISO & Security Leadership – Permanent",
+          "type": "permanent"
+        },
+        {
+          "id": "b44acdcc-2c3b-446e-90f0-39eb19969a35",
+          "name": "CISO & Security Leadership – Freelance",
+          "type": "freelance"
+        }
+      ],
+      "roleSubGroups": [
+        "A7"
+      ],
+      "keywords": [
+        "ciso",
+        "chief information security officer",
+        "head of security",
+        "head of cyber",
+        "security manager",
+        "security lead",
+        "vciso"
+      ],
+      "roleGroups": []
+    }
+  }
+}

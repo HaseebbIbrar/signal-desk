@@ -106,7 +106,12 @@ Use fake data first; nothing touches SharePoint.
 8. **Verified:** open **Edit LinkedIn (column M)** on a waiting card, paste `linkedin.com/in/test-person` and click **Save**. You should see "✓ Saved to master sheet", and the card moves to *Ready to review*. A `linkedin.com/company/...` link is refused.
 9. **Verified:** on a job with two people, **✓ Approve → Decision Makers** each card separately. The heading goes "1 of 2 sent" → "2 of 2 sent", and each card shows **Sent ✓ <today>**. **Undo** removes the row just added.
 10. **Verified:** **+ Add another decision maker** on a job: paste a new person's LinkedIn and click **Add**. A new card appears (a new verify-tab row). Pasting someone already listed for that job is refused.
-11. To reset the fake data, delete `storage/mock-workbook.json`.
+11. **Candidates (Atlas):** set `'ATLAS_BACKEND' => 'mock'` in `config.php` to test with fake candidates.
+    - Signals and Verified cards show **"Atlas: N (P / F)"** (or "No matching list").
+    - Clicking a badge opens **Candidates** with the role filled in.
+    - That page shows "N candidates (P permanent / F freelance)", the matched lists, and 25 people per page with **Open in Atlas** and **CV**.
+    - **Lists** shows the families. Edit a keyword and click **Save** ("✓ Saved"). **Refresh from Atlas** works once, then says to wait a minute.
+12. To reset the fake data, delete `storage/mock-workbook.json`.
 
 ## 7. Switch to live
 
@@ -127,6 +132,51 @@ Use fake data first; nothing touches SharePoint.
 5. Open `/health.php` once more. The first real tick appends right after the verify tab's last row; check it in Excel.
 
 The app refuses to start if `APP_ENV=development` points at the master's item id, if dev and master ids are equal, or if `WORKBOOK_BACKEND=mock` is combined with `APP_ENV=production`.
+
+## Candidate Desk (Atlas, read-only)
+
+The **Candidates** page and the **"Atlas: N (P / F)"** badges use your Atlas candidate lists. Each role family has a "– Permanent" and a "– Freelance" list, for example "Security Architects – Permanent" and "Security Architects – Freelance".
+
+**Turn it on:**
+1. In Atlas go to **Settings → Integrations → API Keys** and create a key, e.g. "Signal Desk (read-only)". The key acts as its user and sees that user's own lists plus public/company-wide ones. All 47 candidate lists are public, so any agency user's key works.
+2. In `config.php`:
+   ```php
+   'ATLAS_BACKEND' => '',            // '' = on when the key is set; 'off' to switch the feature off
+   'ATLAS_API_KEY' => '…',           // never commit, zip or paste this key in chat
+   'ATLAS_BASE_URL' => 'https://api.recruitwithatlas.com',
+   'ATLAS_PROFILE_URL' => 'https://my.recruitwithatlas.com/people-v2?profile={id}',
+   ```
+3. Open `/health.php`. It should show **Atlas API reachable: OK** and **Atlas lists in the map: OK (46 found)**.
+
+**Which lists match a signal: `storage/atlas-list-map.json`.** It's created from `private/atlas-list-map.default.json` on first use. Edit it on the **Lists** page (or the copy in `storage/` over SFTP); no code changes are needed. Each family lists:
+- its **Permanent** and **Freelance** list (matched by id, or by name if the id isn't found, so renaming a list in Atlas doesn't break it);
+- `roleSubGroups`: values from column R, or just their code, e.g. `"A2"`;
+- `keywords`: whole words matched in the job title, after removing gender markers like (m/f/x) and seniority words;
+- `roleGroups`: values from column G.
+
+The first rule that matches anything decides, in the order Role Sub-Group → keywords → Role Group. Several families can match, and their lists are combined. If the file is broken, `/health.php` shows FAIL and the app uses the default map.
+
+**New lists are picked up automatically.** At most once an hour the app compares Atlas's candidate lists with the map, by list id:
+- **A new list whose family already exists** (the name before "– Permanent", "– Freelance", "– Contract", etc. matches a family name) is added to that family.
+- **A new list with an unknown family** creates that family, with one keyword taken from the list name: lower-case, last word made singular (e.g. "SAP Consultants – Permanent" → keyword `sap consultant`). It is marked **New – please review**.
+- **A list deleted in Atlas** is marked "missing in Atlas" and counts as 0 candidates. Nothing breaks.
+- Lists in `ignoredLists` (e.g. "To verify – Belgian eligibility") are never treated as role families.
+
+**The Lists page** (`/lists`, login required, shown in the menu when Atlas is on):
+- Shows every family with its lists and member counts. New families are listed first, with a **New – please review** badge.
+- **Matching rules** lets you edit a family's title keywords (one per line) and Role Sub-Groups (comma-separated). **Save** writes only `storage/atlas-list-map.json` on this server, never Atlas. It also marks the family reviewed and adds an `atlas_map_edit` entry to the audit log.
+- **Refresh from Atlas** clears the cached counts and list names and checks for new lists straight away. It can be used at most once a minute.
+
+The **Candidates** search box also matches list names, so typing "SAP" finds the "SAP Consultants" lists even when no job title matches.
+
+**Keywords are deliberately narrow.** Generic words such as "risk", "audit", "compliance", "identity" and "simulation" were replaced with phrases ("it risk", "cyber risk", "it audit", "identity and access", "cyber simulation", …). This stops jobs like "Credit Risk Analyst", "Financial Auditor" or "Simulation Engineer" being matched to security lists. If you add a keyword, prefer two words over one.
+
+**What it reads and stores:**
+- **Reads only:** the app can only send GET requests to `/lists`, `/lists/{id}/members`, `/people/{id}`, `/files`, `/files/{id}/download` and `/users`. Anything else, including every create, update or delete, is refused in code before any request is made.
+- **Rate limits:** Atlas allows 1,200 reads per minute per agency. Badges load in batches of 10, one request at a time. On HTTP 429 the app waits for Atlas's `retryAfterSec` (up to 10 seconds) and retries; for a longer wait it shows "Atlas: busy, try later".
+- **Stored on disk:** only counts and list names, in `storage/atlas-cache/`, for 6 hours. Candidate names, roles, companies and locations are fetched live for the 25 people on screen and never written to disk.
+- **CVs:** the CV link is fetched only when you click **CV**. It's a short-lived Atlas download link.
+- **Audit log:** each Atlas call is recorded as method, endpoint pattern and status, with no ids and no names.
 
 ## What the app writes
 
@@ -155,3 +205,11 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 | "Sheet busy, retrying…" | The workbook is locked (often the nightly job). The app retries by itself. |
 | `/health.php` shows a WARN for "… over HTTP" | The server couldn't reach itself (no response, timeout) or got an unexpected status. Open the URL shown in a browser: 403 or 404 means it's fine, while showing the file means it's reachable. |
 | `/health.php` shows a FAIL for "… over HTTP" | `.htaccess` isn't being applied. Make sure both hidden `.htaccess` files were uploaded, and ask 20i whether `AllowOverride` is enabled. Until then, use layout A. |
+| "Atlas refused the API key" | Check `ATLAS_API_KEY` in `config.php`, or create a new key in Atlas (Settings → Integrations → API Keys). |
+| "Atlas lists in the map" WARN: "not visible to this key" | The list is private to another user. Make it public in Atlas, or use that user's key. |
+| A card says "No matching list" | No family matches its Role Sub-Group or title. On the **Lists** page, add the sub-group code or a keyword to a family. |
+| A family shows "New – please review" | Atlas has a new list the app hadn't seen. Check its keywords on the **Lists** page and click **Save & mark reviewed**. |
+| A list shows "missing in Atlas" | It was deleted or made private in Atlas. It counts as 0. Remove it from `storage/atlas-list-map.json` over SFTP if it's gone for good. |
+| "Refresh from Atlas" says wait | It can be used once a minute. New lists are also picked up automatically every hour. |
+| "Atlas: busy, try later" | Atlas's rate limit was reached. Badges retry on the next page load, and counts are cached for 6 hours. |
+| The Verified page or badges look out of date after an upload | 20i caches `/assets/*`. The pages use versioned asset URLs (`?v=`), so make sure your SFTP client sets the upload time; then reload. |

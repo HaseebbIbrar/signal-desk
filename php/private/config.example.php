@@ -33,4 +33,12 @@ return [
 
     // Optional: where storage lives. Default: storage/ next to this file.
     'STORAGE_DIR' => '',
+
+    // Candidate Desk (Atlas, read-only). Create the key in Atlas: Settings -> Integrations -> API Keys.
+    // The key "acts as its user": it sees that user's lists plus company-wide/public lists.
+    // ATLAS_BACKEND: '' = on when ATLAS_API_KEY is set; 'mock' = fake candidates (refused in production); 'off'.
+    'ATLAS_BACKEND' => '',
+    'ATLAS_API_KEY' => '',
+    'ATLAS_BASE_URL' => 'https://api.recruitwithatlas.com',
+    'ATLAS_PROFILE_URL' => 'https://my.recruitwithatlas.com/people-v2?profile={id}',
 ];

@@ -69,6 +69,31 @@ final class App
         header_remove('X-Powered-By');
     }
 
+    private bool $atlasBuilt = false;
+    private ?AtlasListsSource $atlas = null;
+
+    /** The Candidate Desk source (Atlas lists), or null when Atlas is off / not configured. */
+    private function atlas(): ?AtlasListsSource
+    {
+        if (!$this->atlasBuilt) {
+            $this->atlas = Atlas::source($this->config, (string) ($this->config['PRIVATE_DIR'] ?? dirname(__DIR__)));
+            $this->atlasBuilt = true;
+        }
+        return $this->atlas;
+    }
+
+    private function requireAtlas(): AtlasListsSource
+    {
+        return $this->atlas() ?? throw new AppError(503, 'ATLAS_OFF', 'Atlas is not configured (ATLAS_API_KEY in config.php).');
+    }
+
+    private static function str(mixed $v, int $max = 300): string
+    {
+        if (!is_string($v)) return '';
+        $v = trim($v);
+        return function_exists('mb_substr') ? mb_substr($v, 0, $max) : substr($v, 0, $max);
+    }
+
     private function service(): Service
     {
         return $this->service ??= new Service(
@@ -141,6 +166,8 @@ final class App
         match ($path) {
             '/', '/signals' => $path === '/' ? $this->redirect('/signals') : $this->html(Views::shell('signals', $user, $this->config)),
             '/verified' => $this->html(Views::shell('verified', $user, $this->config)),
+            '/candidates' => $this->html(Views::shell('candidates', $user, $this->config)),
+            '/lists' => $this->html(Views::shell('lists', $user, $this->config)),
             default => $this->html(Views::notFound(), 404),
         };
     }
@@ -159,6 +186,13 @@ final class App
                         ($_GET['rejected'] ?? '') === '1',
                     ),
                     'verified' => $this->service()->verifiedView(),
+                    'atlas/search' => $this->requireAtlas()->search(
+                        self::str($_GET['title'] ?? ''), self::str($_GET['sub'] ?? ''), self::str($_GET['group'] ?? ''),
+                        max(1, min(10000, (int) ($_GET['page'] ?? 1))),
+                    ),
+                    'atlas/map' => $this->requireAtlas()->mapView(),
+                    'atlas/cv' => ['url' => $this->requireAtlas()->cvUrl(self::str($_GET['personId'] ?? '', 64))
+                        ?? throw new NotFoundError('No CV for this person in Atlas.')],
                     default => throw new NotFoundError('Unknown API route'),
                 };
                 $this->json($data);
@@ -191,6 +225,9 @@ final class App
                 'unreject' => $s->unreject($job, $user['email']),
                 'linkedin' => $s->saveLinkedIn($row, $job, $body['links'] ?? null, $user['email']),
                 'add-decision-maker' => $s->addDecisionMaker($row, $job, $body['link'] ?? null, $user['email']),
+                'atlas/counts' => $this->atlasCounts($body['items'] ?? null),
+                'atlas/map' => $this->requireAtlas()->saveFamily(self::str($body['family'] ?? '', 200), $body['keywords'] ?? null, $body['roleSubGroups'] ?? null, $user['email']),
+                'atlas/refresh' => $this->requireAtlas()->refresh($user['email']),
                 'approve' => $s->approve($row, $job, $user),
                 'undo-approve' => $s->undoApprove($row, $job, $user['email']),
                 default => throw new NotFoundError('Unknown API route'),
@@ -202,6 +239,33 @@ final class App
             Audit::event('unhandled_error', ['message' => $e->getMessage(), 'where' => basename($e->getFile()) . ':' . $e->getLine()]);
             $this->json(['error' => 'Something went wrong on the server. Please try again.', 'code' => 'INTERNAL'], 500);
         }
+    }
+
+    /** Badge counts for up to 20 signals per request (the page sends them in small batches). */
+    private function atlasCounts(mixed $items): array
+    {
+        if (!is_array($items) || count($items) > 20) throw new ValidationError('items must be a list of at most 20');
+        $atlas = $this->requireAtlas();
+        $out = [];
+        foreach (array_values($items) as $it) {
+            $title = self::str($it['title'] ?? '');
+            $sub = self::str($it['sub'] ?? '');
+            $group = self::str($it['group'] ?? '');
+            $m = $atlas->match($title, $sub, $group);
+            if (!$m['families']) {
+                $out[] = ['none' => true];
+                continue;
+            }
+            try {
+                $c = $atlas->counts($m['families']);
+                $out[] = ['n' => $c['n'], 'p' => $c['p'], 'f' => $c['f'], 'families' => $m['families'], 'reason' => $m['reason']];
+            } catch (AtlasRateLimited $e) {
+                $out[] = ['error' => 'rate', 'retryAfter' => $e->retryAfter];
+            } catch (AppError $e) {
+                $out[] = ['error' => $e->errCode];
+            }
+        }
+        return ['items' => $out];
     }
 
     private function json(mixed $data, int $status = 200): void
@@ -275,12 +339,12 @@ final class Views
         $tab = fn (string $href, string $label, bool $active) => '<a href="' . $href . '"' . ($active ? ' aria-current="page"' : '')
             . ' class="border-b-2 px-3 py-2 text-sm font-medium ' . ($active ? 'border-pink text-white' : 'border-transparent text-white/60 hover:text-white') . '">' . $label . '</a>';
         return self::head('Signal Desk · SwooScale')
-            . '<body class="antialiased" data-page="' . self::e($page) . '" data-csrf="' . self::e($csrf) . '"><div class="min-h-dvh">' . self::banner($config)
+            . '<body class="antialiased" data-page="' . self::e($page) . '" data-csrf="' . self::e($csrf) . '" data-atlas="' . (Atlas::mode($config) === 'off' ? 'off' : 'on') . '"><div class="min-h-dvh">' . self::banner($config)
             . '<header class="sticky top-0 z-20 border-b border-line/60 bg-black/70 backdrop-blur"><div class="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-3">'
             . '<div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-pink" aria-hidden="true"></span><span class="font-semibold tracking-tight">Signal Desk</span></div>'
             . '<div class="flex items-center gap-3 text-sm"><span class="hidden text-white/60 sm:inline">' . self::e($user['name']) . '</span>'
             . '<form method="post" action="/logout"><input type="hidden" name="csrf" value="' . self::e($csrf) . '"><button type="submit" class="rounded-lg border border-line px-3 py-1.5 text-white/80 hover:border-pink hover:text-white">Log out</button></form></div></div>'
-            . '<nav class="mx-auto flex max-w-3xl gap-1 px-3 sm:px-4" aria-label="Main">' . $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . '</nav></header>'
+            . '<nav class="mx-auto flex max-w-3xl gap-1 px-3 sm:px-4" aria-label="Main">' . $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . $tab('/candidates', 'Candidates', $page === 'candidates') . (Atlas::mode($config) === 'off' ? '' : $tab('/lists', 'Lists', $page === 'lists')) . '</nav></header>'
             . '<main id="app" class="mx-auto max-w-3xl px-3 pb-16 pt-4 sm:px-4"><p class="flex items-center gap-2 text-sm text-white/70"><span class="sd-spinner"></span> Reading the master sheet…</p></main>'
             . '</div><script src="' . self::e(App::asset('app.js')) . '" defer></script></body></html>';
     }

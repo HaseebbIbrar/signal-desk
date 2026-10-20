@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace SignalDesk;
 
-foreach (['Util', 'Errors', 'Sheet', 'Guard', 'Store', 'Backend', 'Config', 'Fixture', 'Service', 'Auth', 'App', 'Health'] as $f) {
+foreach (['Util', 'Errors', 'Sheet', 'Guard', 'Store', 'Backend', 'Config', 'Fixture', 'Service', 'Auth', 'Atlas', 'App', 'Health'] as $f) {
     require_once __DIR__ . "/$f.php";
 }
 
@@ -25,5 +25,6 @@ function boot(string $privateDir): array
     date_default_timezone_set($config['TIMEZONE']);
     if (!is_dir($config['STORAGE_DIR'])) @mkdir($config['STORAGE_DIR'], 0700, true);
     Audit::$file = $config['STORAGE_DIR'] . '/audit.log';
+    $config['PRIVATE_DIR'] = $privateDir; // for the default Atlas list map
     return $config;
 }

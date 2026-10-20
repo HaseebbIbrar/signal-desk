@@ -135,6 +135,53 @@
   function busyText(n) { return n > 0 ? "Sheet busy, retrying… (attempt " + n + ")" : null; }
   function uniqSorted(arr) { var s = {}; arr.forEach(function (x) { if (x) s[x] = 1; }); return Object.keys(s).sort(); }
 
+  // ---------------------------------------------------------------- Atlas badges ("Atlas: N (P / F)")
+  // Counts load lazily, in batches of 10, one request at a time, and are remembered for this page.
+  var atlasOn = body.getAttribute("data-atlas") === "on";
+  var atlasCache = {}, atlasQueue = [], atlasTimer = null, atlasBusy = false;
+  function atlasKey(t, s, g) { return [t || "", s || "", g || ""].join("\u0001"); }
+  function candidatesHref(title, sub, group) {
+    var q = [];
+    if (title) q.push("title=" + encodeURIComponent(title));
+    if (sub) q.push("sub=" + encodeURIComponent(sub));
+    if (group) q.push("group=" + encodeURIComponent(group));
+    return "/candidates" + (q.length ? "?" + q.join("&") : "");
+  }
+  function fillAtlas(el, r) {
+    el.classList.remove("sd-atlas-none");
+    if (r.none) { el.textContent = "No matching list"; el.classList.add("sd-atlas-none"); el.title = "No Atlas candidate list matches this role (see storage/atlas-list-map.json)"; }
+    else if (r.error) { el.textContent = r.error === "rate" ? "Atlas: busy, try later" : "Atlas: unavailable"; }
+    else { el.textContent = "Atlas: " + r.n + " (" + r.p + " / " + r.f + ")"; el.title = r.n + " candidates (" + r.p + " permanent / " + r.f + " freelance) via " + r.reason + ": " + r.families.join(", "); }
+  }
+  function atlasBadge(title, sub, group) {
+    if (!atlasOn || !(title || sub)) return null;
+    var a = h("a", { class: "sd-atlas-badge", href: candidatesHref(title, sub, group), text: "Atlas: …" });
+    var key = atlasKey(title, sub, group);
+    if (atlasCache[key]) fillAtlas(a, atlasCache[key]);
+    else { atlasQueue.push({ key: key, el: a, item: { title: title || "", sub: sub || "", group: group || "" } }); if (!atlasTimer) atlasTimer = setTimeout(runAtlas, 60); }
+    return a;
+  }
+  function runAtlas() {
+    atlasTimer = null;
+    if (atlasBusy) return;
+    atlasQueue = atlasQueue.filter(function (q) {
+      if (atlasCache[q.key]) { fillAtlas(q.el, atlasCache[q.key]); return false; }
+      return document.body.contains(q.el); // cards re-rendered since: drop their stale badges
+    });
+    var seen = {}, batch = [];
+    atlasQueue.forEach(function (q) { if (!seen[q.key] && batch.length < 10) { seen[q.key] = 1; batch.push(q); } });
+    if (!batch.length) return;
+    atlasBusy = true;
+    var done = function (key, r) {
+      atlasQueue = atlasQueue.filter(function (q) { if (q.key !== key) return true; fillAtlas(q.el, r); return false; });
+    };
+    api("/api/atlas/counts", { method: "POST", body: { items: batch.map(function (q) { return q.item; }) } })
+      .then(function (res) {
+        batch.forEach(function (q, i) { var r = (res.items || [])[i] || { error: "x" }; if (!r.error) atlasCache[q.key] = r; done(q.key, r); });
+      }, function () { batch.forEach(function (q) { done(q.key, { error: "x" }); }); })
+      .then(function () { atlasBusy = false; if (atlasQueue.length) setTimeout(runAtlas, 250); });
+  }
+
   // ================================================================ Signals page
   function signalsPage() {
     var st = { view: null, loading: true, error: null, busy: null, notice: null, pending: {},
@@ -264,7 +311,8 @@
             h("p", { class: "text-sm text-white/85", text: row.jobTitle }),
             h("div", { class: "mt-1.5 flex flex-wrap gap-1.5" },
               row.roleGroup ? chip(row.roleGroup, "pink") : null, row.roleSubGroup ? chip(row.roleSubGroup, "pink") : null,
-              row.companyType ? chip(row.companyType) : null, row.location ? chip(row.location) : null),
+              row.companyType ? chip(row.companyType) : null, row.location ? chip(row.location) : null,
+              atlasBadge(row.jobTitle, row.roleSubGroup, row.roleGroup)),
             actions,
             details([["Notes", row.notes], ["Lemlist / Prior Outreach", row.priorOutreach], ["Verified Evidence", row.verifiedEvidence],
               ["Matched keyword", row.matchedKeyword], ["Source", row.source], ["Status", row.status], ["Domain", row.domain], ["My comments", row.myComments]]))));
@@ -488,6 +536,7 @@
         h("div", { class: "mt-1.5 flex flex-wrap items-center gap-1.5 text-sm" },
           job.roleGroup ? chip(job.roleGroup, "pink") : null, job.roleSubGroup ? chip(job.roleSubGroup, "pink") : null,
           job.companyType ? chip(job.companyType) : null, job.location ? chip(job.location) : null,
+          atlasBadge(job.jobTitle, job.roleSubGroup, job.roleGroup),
           href ? h("a", { href: href, target: "_blank", rel: "noopener noreferrer", class: "ml-1 font-medium text-pink-soft hover:underline", text: "Open job ↗" }) : null),
         details([["Notes", job.notes], ["Lemlist / Prior Outreach", job.priorOutreach], ["Verified Evidence", job.verifiedEvidence], ["My comments", job.myComments]]),
         h("ul", { class: "mt-3 space-y-2" }, cards.map(function (c) { return dmCard(job, c, job.cards.indexOf(c)); })),
@@ -521,6 +570,215 @@
     load();
   }
 
+  // ================================================================ Candidates page (Atlas lists, read-only)
+  function candidatesPage() {
+    var params = new URLSearchParams(window.location.search);
+    var st = { title: params.get("title") || "", sub: params.get("sub") || "", group: params.get("group") || "", page: 1, data: null, loading: false, error: null, busy: null, cvMsg: {} };
+    clear(app);
+    if (!atlasOn) {
+      app.appendChild(notice("warn", "Atlas is not configured. Add ATLAS_API_KEY to config.php (see DEPLOY-20I.md)."));
+      return;
+    }
+    var form = h("form", { class: "space-y-3 rounded-2xl border border-line bg-card/80 p-3" });
+    var msgs = h("div", { class: "space-y-2" });
+    var results = h("div", { class: "space-y-3" });
+    app.appendChild(h("div", { class: "space-y-4" }, form, msgs, results));
+
+    function syncUrl() {
+      var q = candidatesHref(st.title, st.sub, st.group);
+      try { window.history.replaceState(null, "", q); } catch (e) { /* ignore */ }
+    }
+    function load() {
+      if (!st.title.trim() && !st.sub) { st.data = null; render(); return; }
+      st.loading = true; st.error = null; syncUrl(); render();
+      var q = "?title=" + encodeURIComponent(st.title) + "&sub=" + encodeURIComponent(st.sub) + "&group=" + encodeURIComponent(st.group) + "&page=" + st.page;
+      api("/api/atlas/search" + q, { onBusy: function (n) { st.busy = busyText(n); renderMsgs(); } })
+        .then(function (d) { st.data = d; st.page = d.page || 1; }, function (e) { st.error = e.message; })
+        .then(function () { st.loading = false; render(); });
+    }
+
+    function renderForm() {
+      clear(form);
+      var input = h("input", { class: fieldClass, type: "search", name: "title", placeholder: "Job title, e.g. Security Architect", value: st.title, "aria-label": "Job title" });
+      form.onsubmit = function (e) { e.preventDefault(); st.title = input.value; st.page = 1; load(); };
+      form.appendChild(h("div", null, h("h1", { class: "text-lg font-semibold", text: "Candidates in Atlas" }),
+        h("p", { class: "text-sm text-white/70", text: "Searches your Atlas candidate lists (Permanent and Freelance) that match the role. Read-only." })));
+      form.appendChild(h("div", { class: "flex gap-2" }, input, h("button", { type: "submit", class: "rounded-xl bg-pink px-4 py-2 text-sm font-semibold text-white hover:brightness-110", text: "Search" })));
+      if (st.sub || st.group) {
+        form.appendChild(h("div", { class: "flex flex-wrap items-center gap-1.5 text-sm" },
+          h("span", { class: "text-xs text-white/50", text: "From the signal:" }),
+          st.sub ? chip(st.sub, "pink") : null, st.group ? chip(st.group) : null,
+          h("button", { type: "button", class: "sd-btn-secondary", text: "Title only", onclick: function () { st.sub = ""; st.group = ""; st.page = 1; renderForm(); load(); } })));
+      }
+    }
+    function renderMsgs() {
+      clear(msgs);
+      if (st.busy) msgs.appendChild(notice("busy", st.busy));
+      if (st.error) msgs.appendChild(notice("error", st.error));
+      if (st.loading) msgs.appendChild(h("p", { class: "flex items-center gap-2 text-sm text-white/70" }, h("span", { class: "sd-spinner" }), " Reading Atlas lists…"));
+    }
+    function cvButton(m) {
+      var btn = h("button", { type: "button", class: "sd-btn-secondary", text: "CV" });
+      btn.addEventListener("click", function () {
+        var w = window.open("", "_blank");
+        if (w) w.opener = null;
+        btn.disabled = true; btn.textContent = "CV…";
+        api("/api/atlas/cv?personId=" + encodeURIComponent(m.id))
+          .then(function (r) {
+            var u = safeHref(r.url);
+            if (u && w) w.location.href = u; else if (u) window.location.href = u;
+            btn.textContent = "CV";
+          }, function (e) { if (w) w.close(); btn.textContent = e.message.indexOf("No CV") === 0 ? "No CV" : "CV failed"; })
+          .then(function () { btn.disabled = false; });
+      });
+      return btn;
+    }
+    function member(m) {
+      var href = safeHref(m.profileUrl);
+      return h("li", { class: "rounded-2xl border border-line bg-card p-3" },
+        h("div", { class: "flex items-start justify-between gap-2" },
+          h("div", { class: "min-w-0" },
+            h("h3", { class: "font-semibold leading-snug", text: m.name }),
+            h("p", { class: "text-sm text-white/85", text: [m.role, m.company].filter(Boolean).join(" · ") || "—" })),
+          h("div", { class: "flex flex-wrap gap-1" }, m.types.map(function (t) { return chip(t === "permanent" ? "Permanent" : "Freelance", t === "permanent" ? "pink" : null); }))),
+        h("div", { class: "mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" },
+          m.location ? h("span", { class: "text-white/70", text: m.location }) : null,
+          m.updatedAt ? h("span", { class: "text-xs text-white/50", text: "Last updated " + m.updatedAt }) : null,
+          href ? h("a", { href: href, target: "_blank", rel: "noopener noreferrer", class: "font-medium text-pink-soft hover:underline", text: "Open in Atlas ↗" }) : null,
+          cvButton(m)));
+    }
+    function renderResults() {
+      clear(results);
+      var d = st.data;
+      if (!d) { results.appendChild(h("p", { class: "text-sm text-white/60", text: "Type a job title to see matching candidates." })); return; }
+      if (!d.families.length) {
+        results.appendChild(notice("warn", "No matching list for \"" + (d.normalisedTitle || st.title) + "\". Add keywords to storage/atlas-list-map.json to map this role to a list family."));
+        return;
+      }
+      var c = d.counts;
+      results.appendChild(h("section", { class: "space-y-2 rounded-2xl border border-line bg-card/80 p-3" },
+        h("p", { class: "text-base" }, h("strong", { class: "text-white", text: String(c.n) }), " candidates (",
+          h("strong", { class: "text-pink-soft", text: String(c.p) }), " permanent / ", h("strong", { class: "text-white", text: String(c.f) }), " freelance)"),
+        h("p", { class: "text-xs text-white/50", text: "Matched by " + d.reason + (d.normalisedTitle ? " for \"" + d.normalisedTitle + "\"" : "") + ". People on several lists are counted once." }),
+        h("ul", { class: "space-y-1 text-sm" }, c.lists.map(function (l) {
+          return h("li", { class: l.found ? "text-white/85" : "text-warn", text: l.name + " · " + (l.found ? l.count + " members" : "not visible to the API key") });
+        }))));
+      if (!d.members.length) return;
+      results.appendChild(h("ul", { class: "space-y-3" }, d.members.map(member)));
+      if (d.totalPages > 1) {
+        results.appendChild(h("div", { class: "flex items-center justify-between gap-2 text-sm" },
+          h("button", { type: "button", class: "sd-btn-secondary", disabled: d.page <= 1 || st.loading, onclick: function () { st.page = d.page - 1; load(); }, text: "← Previous" }),
+          h("span", { class: "text-white/60", text: "Page " + d.page + " of " + d.totalPages }),
+          h("button", { type: "button", class: "sd-btn-secondary", disabled: d.page >= d.totalPages || st.loading, onclick: function () { st.page = d.page + 1; load(); }, text: "Next →" })));
+      }
+    }
+    function render() { renderForm(); renderMsgs(); renderResults(); }
+    render();
+    load();
+  }
+
+  // ================================================================ Lists page (Atlas list map)
+  // Families and their Atlas lists, with "New – please review" for auto-created ones. Edits only change
+  // storage/atlas-list-map.json on our server, never Atlas.
+  function listsPage() {
+    var st = { view: null, loading: true, error: null, notice: null, refreshing: false, onlyReview: false };
+    var header = h("section", { class: "space-y-3 rounded-2xl border border-line bg-card/80 p-3" });
+    var msgs = h("div", { class: "space-y-2" });
+    var list = h("ul", { class: "space-y-3" });
+    clear(app);
+    if (!atlasOn) { app.appendChild(notice("warn", "Atlas is not configured. Add ATLAS_API_KEY to config.php (see DEPLOY-20I.md).")); return; }
+    app.appendChild(h("div", { class: "space-y-4" }, header, msgs, list));
+
+    function load() {
+      st.loading = true; render();
+      return api("/api/atlas/map").then(function (v) { st.view = v; st.error = null; }, function (e) { st.error = e.message; })
+        .then(function () { st.loading = false; render(); });
+    }
+    function when(iso) { return iso ? iso.replace("T", " ").slice(0, 16) + " UTC" : "never"; }
+    function refresh() {
+      st.refreshing = true; st.notice = null; render();
+      api("/api/atlas/refresh", { method: "POST", body: {} })
+        .then(function (r) {
+          st.notice = { kind: "ok", text: "Refreshed from Atlas: " + r.cleared + " cached file(s) cleared" + (r.changes.length ? "; changes:\n• " + r.changes.join("\n• ") : "; no list changes.") };
+          return load();
+        }, function (e) { st.notice = { kind: e.code === "REFRESH_TOO_SOON" ? "warn" : "error", text: e.message }; })
+        .then(function () { st.refreshing = false; render(); });
+    }
+
+    function renderHeader() {
+      clear(header);
+      var v = st.view;
+      var toReview = v ? v.families.filter(function (f) { return !f.reviewed; }).length : 0;
+      header.appendChild(h("div", { class: "flex flex-wrap items-start justify-between gap-2" },
+        h("div", null, h("h1", { class: "text-lg font-semibold", text: "Atlas lists" }),
+          h("p", { class: "text-sm text-white/70", text: v ? v.families.length + " families · " + toReview + " to review · last check " + when(v.discoveredAt) : "Loading…" })),
+        h("button", { type: "button", class: "sd-btn-secondary", disabled: st.refreshing, onclick: refresh, text: st.refreshing ? "Refreshing…" : "Refresh from Atlas" })));
+      header.appendChild(h("p", { class: "text-xs text-white/50", text: "New Atlas lists are picked up automatically (at most once an hour). Editing here changes only Signal Desk's matching rules (storage/atlas-list-map.json), never Atlas." }));
+      if (toReview) header.appendChild(h("label", { class: "flex items-center gap-2 text-sm text-white/80" },
+        h("input", { type: "checkbox", class: "h-5 w-5", checked: st.onlyReview, onchange: function (e) { st.onlyReview = e.target.checked; renderList(); } }), "Only families to review"));
+    }
+    function renderMsgs() {
+      clear(msgs);
+      if (st.notice) msgs.appendChild(notice(st.notice.kind, st.notice.text, function () { st.notice = null; renderMsgs(); }));
+      if (st.error) msgs.appendChild(notice("error", st.error));
+      if (st.loading && !st.view) msgs.appendChild(h("p", { class: "flex items-center gap-2 text-sm text-white/70" }, h("span", { class: "sd-spinner" }), " Reading Atlas lists…"));
+    }
+
+    function familyCard(f) {
+      var kw = h("textarea", { class: fieldClass, rows: "4", "aria-label": "Keywords for " + f.name });
+      kw.value = f.keywords.join("\n");
+      var sg = h("input", { class: fieldClass, type: "text", value: f.roleSubGroups.join(", "), placeholder: "e.g. A4, G6", "aria-label": "Role Sub-Groups for " + f.name });
+      var msg = h("div");
+      var save = h("button", { type: "button", class: "rounded-xl bg-pink px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50", text: f.reviewed ? "Save" : "Save & mark reviewed" });
+      save.addEventListener("click", function () {
+        save.disabled = true; clear(msg);
+        var body = { family: f.name, keywords: kw.value.split(/\n|,/), roleSubGroups: sg.value.split(/,|\n/) };
+        api("/api/atlas/map", { method: "POST", body: body }).then(function (r) {
+          f.keywords = r.keywords; f.roleSubGroups = r.roleSubGroups; f.reviewed = true;
+          kw.value = r.keywords.join("\n"); sg.value = r.roleSubGroups.join(", ");
+          msg.appendChild(h("p", { class: "text-sm font-medium text-ok", role: "status", text: "✓ Saved" }));
+          save.textContent = "Save"; renderHeader();
+          var badge = card.querySelector(".sd-review-badge"); if (badge) badge.remove();
+        }, function (e) { msg.appendChild(notice("error", e.message)); }).then(function () { save.disabled = false; });
+      });
+      var card = h("li", { class: "rounded-2xl border p-3 " + (f.reviewed ? "border-line bg-card" : "border-warn/50 bg-card-2") },
+        h("div", { class: "flex flex-wrap items-start justify-between gap-2" },
+          h("h3", { class: "font-semibold leading-snug", text: f.name }),
+          h("div", { class: "flex flex-wrap gap-1" },
+            !f.reviewed ? h("span", { class: "sd-review-badge", text: "New – please review" }) : null,
+            f.auto ? chip("auto") : null)),
+        h("ul", { class: "mt-2 space-y-1 text-sm" }, f.lists.map(function (l) {
+          return h("li", { class: "flex flex-wrap items-center gap-1.5" },
+            chip(l.type, l.type === "permanent" ? "pink" : null),
+            h("span", { class: l.missing ? "text-warn" : "text-white/85", text: l.name }),
+            l.missing ? h("span", { class: "sd-review-badge", text: "missing in Atlas" }) : h("span", { class: "text-xs text-white/50", text: (l.count === null ? "?" : l.count) + " members" }),
+            l.auto ? h("span", { class: "text-xs text-white/40", text: "added automatically " + (l.addedAt || "") }) : null);
+        })),
+        h("details", { class: "group mt-2" },
+          h("summary", { class: "text-sm text-white/60 hover:text-white" },
+            h("span", { class: "group-open:hidden", text: "▸ Matching rules (" + f.keywords.length + " keywords, " + f.roleSubGroups.length + " sub-groups)" }),
+            h("span", { class: "hidden group-open:inline", text: "▾ Matching rules" })),
+          h("div", { class: "mt-2 space-y-2" },
+            h("label", { class: "block text-sm" }, h("span", { class: "mb-1 block text-xs uppercase tracking-wide text-white/50", text: "Title keywords (one per line, whole words)" }), kw),
+            h("label", { class: "block text-sm" }, h("span", { class: "mb-1 block text-xs uppercase tracking-wide text-white/50", text: "Role Sub-Groups (codes like A4 or full names, comma-separated)" }), sg),
+            h("div", { class: "flex flex-wrap items-center gap-2" }, save, msg))));
+      if (!f.reviewed) card.querySelector("details").setAttribute("open", "");
+      return card;
+    }
+    function renderList() {
+      clear(list);
+      var v = st.view;
+      if (!v) return;
+      var fams = v.families.slice().sort(function (a, b) { return (a.reviewed === b.reviewed) ? 0 : a.reviewed ? 1 : -1; });
+      fams.filter(function (f) { return !st.onlyReview || !f.reviewed; }).forEach(function (f) { list.appendChild(familyCard(f)); });
+      if (v.ignoredLists.length) list.appendChild(h("li", { class: "text-xs text-white/50", text: "Ignored lists (not role families): " + v.ignoredLists.map(function (l) { return l.name; }).join("; ") }));
+    }
+    function render() { renderHeader(); renderMsgs(); renderList(); }
+    load();
+  }
+
   if (page === "signals") signalsPage();
   else if (page === "verified") verifiedPage();
+  else if (page === "candidates") candidatesPage();
+  else if (page === "lists") listsPage();
 })();

@@ -10,6 +10,30 @@ final class Health
     /** @return array<int,array{0:string,1:string,2:string}> [check, status OK|WARN|FAIL, detail] */
     public static function checks(array $config, string $privateDir, string $layout, string $origin): array
     {
+        return array_merge(self::baseChecks($config, $privateDir, $layout, $origin), self::atlasChecks($config, $privateDir));
+    }
+
+    /** Candidate Desk (Atlas): mode, API key, list map, API reachable, lists visible. Never shows the key. */
+    public static function atlasChecks(array $config, string $privateDir, ?CandidateSource $source = null): array
+    {
+        $mode = Atlas::mode($config);
+        if ($mode === 'off') return [['Atlas (Candidate Desk)', 'WARN', 'off: set ATLAS_API_KEY in config.php to enable it']];
+        $rows = [['Atlas (Candidate Desk)', 'OK', $mode === 'mock' ? 'mock (fake candidates)' : 'live']];
+        if ($mode === 'atlas') $rows[] = ['ATLAS_API_KEY', ($config['ATLAS_API_KEY'] ?? '') !== '' ? 'OK' : 'FAIL', ($config['ATLAS_API_KEY'] ?? '') !== '' ? 'set' : 'missing'];
+        $map = ListMap::load($config['STORAGE_DIR'], $privateDir . '/atlas-list-map.default.json');
+        $rows[] = ['Atlas list map', $map['error'] ? 'FAIL' : 'OK', $map['error'] ?? (count($map['map']['families'] ?? []) . ' families (' . basename($map['file']) . ')')];
+        try {
+            $source ??= Atlas::source($config, $privateDir);
+            if ($source) $rows = array_merge($rows, $source->health());
+        } catch (\Throwable $e) {
+            $rows[] = ['Atlas API reachable', 'FAIL', $e->getMessage()];
+        }
+        return $rows;
+    }
+
+    /** @return array<int,array{0:string,1:string,2:string}> */
+    private static function baseChecks(array $config, string $privateDir, string $layout, string $origin): array
+    {
         $out = [];
         $add = function (string $check, string $status, string $detail) use (&$out) { $out[] = [$check, $status, $detail]; };
 

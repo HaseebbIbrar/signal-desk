@@ -14,6 +14,7 @@ final class Config
         'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
         'GRAPH_DRIVE_ID', 'GRAPH_MASTER_ITEM_ID', 'GRAPH_DEV_ITEM_ID',
         'AUTH_USERS', 'STORAGE_DIR',
+        'ATLAS_BACKEND', 'ATLAS_API_KEY', 'ATLAS_BASE_URL', 'ATLAS_PROFILE_URL',
     ];
 
     /** @return array<string,string> validated settings */
@@ -40,6 +41,15 @@ final class Config
         $c['STORAGE_DIR'] = $c['STORAGE_DIR'] ?: $privateDir . '/storage';
         if ($c['WORKBOOK_BACKEND'] === 'mock' && $c['APP_ENV'] === 'production') {
             throw new ConfigError('WORKBOOK_BACKEND=mock is not allowed when APP_ENV=production.');
+        }
+        foreach (['ATLAS_BACKEND', 'ATLAS_API_KEY', 'ATLAS_BASE_URL', 'ATLAS_PROFILE_URL'] as $k) $c[$k] = trim((string) ($c[$k] ?? ''));
+        $c['ATLAS_BACKEND'] = strtolower($c['ATLAS_BACKEND']);
+        if (!in_array($c['ATLAS_BACKEND'], ['', 'atlas', 'mock', 'off'], true)) throw new ConfigError('ATLAS_BACKEND must be atlas, mock or off.');
+        if ($c['ATLAS_BACKEND'] === 'mock' && $c['APP_ENV'] === 'production') {
+            throw new ConfigError('ATLAS_BACKEND=mock is not allowed when APP_ENV=production.');
+        }
+        if ($c['ATLAS_BASE_URL'] !== '' && !preg_match('~^https://[a-z0-9.-]+(?::\d+)?/?$~i', $c['ATLAS_BASE_URL'])) {
+            throw new ConfigError('ATLAS_BASE_URL must look like https://api.recruitwithatlas.com');
         }
         if ($c['APP_ENV'] === 'production' && $c['APP_ORIGIN'] === '') {
             throw new ConfigError('APP_ORIGIN must be set in production (e.g. https://signals.swooscale.com).');
