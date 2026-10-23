@@ -29,6 +29,7 @@ final class AtlasGuard
         '/api/v1/lists' => '#^/api/v1/lists$#',
         '/api/v1/lists/{id}/members' => '#^/api/v1/lists/' . self::UUID . '/members$#',
         '/api/v1/people/{id}' => '#^/api/v1/people/' . self::UUID . '$#',
+        '/api/v1/people/search' => '#^/api/v1/people/search$#', // exact e-mail / phone / LinkedIn URL lookup only
         '/api/v1/files' => '#^/api/v1/files$#',
         '/api/v1/files/{id}/download' => '#^/api/v1/files/' . self::UUID . '/download$#',
         '/api/v1/users' => '#^/api/v1/users$#',
@@ -180,26 +181,90 @@ final class TtlFileCache
  */
 final class ListMap
 {
-    public const LIST_TYPES = ['permanent', 'freelance', 'contract', 'interim', 'temporary', 'fixed-term'];
+    /** "pool" = one list holding every candidate of a family (no Permanent/Freelance split); the others still work. */
+    public const LIST_TYPES = ['pool', 'permanent', 'freelance', 'contract', 'interim', 'temporary', 'fixed-term'];
 
-    /** @return array{map:array,file:string,error:?string} */
+    /** @return array{map:array,file:string,error:?string,migrated?:array} */
     public static function load(string $storageDir, string $defaultFile): array
     {
         $file = $storageDir . '/atlas-list-map.json';
         if (!is_file($file) && is_file($defaultFile)) @copy($defaultFile, $file);
         $error = null;
+        $migrated = [];
+        $default = is_file($defaultFile) ? json_decode((string) file_get_contents($defaultFile), true) : null;
         $map = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
         if (!is_array($map)) {
             $error = is_file($file) ? 'atlas-list-map.json is not valid JSON; using the default map' : null;
-            $map = self::upgrade(json_decode((string) @file_get_contents($defaultFile), true) ?: ['families' => []]);
+            $map = self::upgrade(is_array($default) ? $default : ['families' => []]);
         } else {
             $map = self::upgrade($map);
+            if (is_array($default) && ($default['mapRevision'] ?? '') !== '' && ($map['mapRevision'] ?? '') !== $default['mapRevision']) {
+                $r = self::migrate($map, self::upgrade($default));
+                @copy($file, preg_replace('/\.json$/', '', $file) . '.before-' . $default['mapRevision'] . '.json');
+                $map = $r['map'];
+                $migrated = $r['changes'];
+                self::save($file, $map);
+                Audit::event('atlas_map_migrated', ['revision' => $default['mapRevision'], 'changes' => count($migrated)]);
+            }
             if ($e = self::validate($map)) {
                 $error = "atlas-list-map.json: $e; using the default map";
-                $map = self::upgrade(json_decode((string) @file_get_contents($defaultFile), true) ?: ['families' => []]);
+                $map = self::upgrade(is_array($default) ? $default : ['families' => []]);
             }
         }
-        return ['map' => $map, 'file' => is_file($file) ? $file : $defaultFile, 'error' => $error];
+        return ['map' => $map, 'file' => is_file($file) ? $file : $defaultFile, 'error' => $error, 'migrated' => $migrated];
+    }
+
+    /**
+     * Move a stored map to a new default revision (e.g. 46 Permanent/Freelance lists -> 6 pools). The new default
+     * wins; keywords and Role Sub-Groups the user ADDED to an old family (not known anywhere in the new default)
+     * move to that family's pool (retiredFamilies); new families found in Atlas meanwhile are kept;
+     * the old lists become retiredLists (never "missing", never re-created as new families).
+     * @return array{map:array,changes:array<int,string>}
+     */
+    public static function migrate(array $old, array $default): array
+    {
+        $map = $default;
+        $changes = [];
+        $known = [];
+        foreach ($default['families'] as $f) foreach (['keywords', 'roleSubGroups', 'roleGroups'] as $k) foreach ($f[$k] as $v) $known[$k][self::familyKey((string) $v)] = true;
+        $retired = [];
+        foreach ($map['retiredLists'] as $l) $retired[(string) ($l['id'] ?? '')] = true;
+        $poolIds = [];
+        foreach ($default['families'] as $f) foreach ($f['lists'] as $l) $poolIds[(string) ($l['id'] ?? '')] = true;
+        $retiredFamilies = is_array($default['retiredFamilies'] ?? null) ? $default['retiredFamilies'] : [];
+        foreach ($old['families'] as $name => $f) {
+            $name = (string) $name;
+            $target = isset($map['families'][$name]) ? $name : ($retiredFamilies[$name] ?? null);
+            $live = array_filter($f['lists'], fn ($l) => !isset($retired[(string) ($l['id'] ?? '')]) && !isset($poolIds[(string) ($l['id'] ?? '')]));
+            if ($target === null || !isset($map['families'][$target])) {
+                if ($live) {
+                    $map['families'][$name] = $f; // a family found in Atlas after the default was written: keep it
+                    $changes[] = "family \"$name\" kept";
+                }
+                continue;
+            }
+            foreach (['keywords', 'roleSubGroups', 'roleGroups'] as $k) {
+                foreach ($f[$k] as $v) {
+                    if (!is_string($v) || isset($known[$k][self::familyKey($v)])) continue;
+                    $map['families'][$target][$k][] = $v;
+                    $known[$k][self::familyKey($v)] = true;
+                    $changes[] = "your " . ($k === 'keywords' ? 'keyword' : ($k === 'roleSubGroups' ? 'Role Sub-Group' : 'Role Group')) . " \"$v\" moved from \"$name\" to \"$target\"";
+                }
+            }
+            foreach ($live as $l) { // a list added to an old family after the default was written: keep it under the pool
+                $map['families'][$target]['lists'][] = $l;
+                $changes[] = "list \"{$l['name']}\" moved to \"$target\"";
+            }
+            foreach ($f['lists'] as $l) {
+                $id = (string) ($l['id'] ?? '');
+                if ($id !== '' && isset($retired[$id]) === false && !in_array($l, $live, true)) {
+                    $map['retiredLists'][] = ['id' => $id, 'name' => (string) ($l['name'] ?? '')];
+                    $retired[$id] = true;
+                }
+            }
+        }
+        $map['ignoredLists'] = array_values(array_unique(array_merge($default['ignoredLists'], $old['ignoredLists']), SORT_REGULAR));
+        return ['map' => $map, 'changes' => $changes];
     }
 
     /** Version-1 files (permanent/freelance keys) become version 2 (lists[]). Hand-edited old files keep working. */
@@ -219,6 +284,7 @@ final class ListMap
             $m['families'][$name] = $f;
         }
         $m['ignoredLists'] = is_array($m['ignoredLists'] ?? null) ? $m['ignoredLists'] : [];
+        $m['retiredLists'] = is_array($m['retiredLists'] ?? null) ? $m['retiredLists'] : [];
         $m['version'] = 2;
         return $m;
     }
@@ -252,11 +318,15 @@ final class ListMap
         });
     }
 
-    /** "Security Architects – Permanent" -> ["Security Architects", "permanent"]; no known suffix -> [name, "other"]. */
+    /**
+     * "Security Architects – Permanent" -> ["Security Architects", "permanent"]; "Candidates – Data & AI" -> ["Data & AI", "pool"]
+     * (the "Candidates –" prefix is dropped); no known suffix -> [name, "pool"].
+     */
     public static function parseListName(string $name): array
     {
+        $name = preg_replace('~^\s*candidates\s*[–—-]\s*~iu', '', $name) ?? $name;
         $re = '~^(.*\S)\s*[–—-]\s*(permanent|perm|freelancers?|freelance|contractors?|contract|interim|temporary|temp|fixed[- ]term)\s*$~iu';
-        if (!preg_match($re, trim($name), $m)) return [trim($name), 'other'];
+        if (!preg_match($re, trim($name), $m)) return [trim($name), 'pool'];
         $t = strtolower($m[2]);
         $type = match (true) {
             str_starts_with($t, 'perm') => 'permanent',
@@ -437,7 +507,7 @@ final class ListMap
             unset($l);
         }
         unset($f);
-        foreach ($map['ignoredLists'] as $ig) if (!empty($ig['id'])) $known[(string) $ig['id']] = true;
+        foreach (array_merge($map['ignoredLists'], $map['retiredLists'] ?? []) as $ig) if (!empty($ig['id'])) $known[(string) $ig['id']] = true;
 
         $byKey = [];
         foreach ($map['families'] as $fam => $f) $byKey[self::familyKey((string) $fam)] = (string) $fam;
@@ -466,11 +536,11 @@ interface CandidateSource
     /** @return array{families:string[],reason:string,normalisedTitle:string} */
     public function match(string $title, string $subGroup = '', string $roleGroup = ''): array;
 
-    /** Aggregate counts for families: n (deduplicated), p (permanent), f (freelance), and per-list counts. */
-    public function counts(array $families): array;
+    /** Badge numbers: pool size (m) and matching titles in the pool (n, null while the title index is not built). */
+    public function summary(string $title, string $subGroup = '', string $roleGroup = '', bool $byListName = false): array;
 
-    /** Matched families (incl. list-name matches) + counts + one page of deduplicated members (fetched live). */
-    public function search(string $title, string $subGroup, string $roleGroup, int $page): array;
+    /** Matched pools + numbers + one page of people (names and details fetched live). */
+    public function search(string $title, string $subGroup, string $roleGroup, int $page, bool $all = false): array;
 
     /** Short-lived CV download URL for a person, fetched on demand, or null. */
     public function cvUrl(string $personId): ?string;
@@ -484,6 +554,7 @@ final class AtlasListsSource implements CandidateSource
     public const PAGE_SIZE = 25;
     public const DISCOVERY_INTERVAL = 3600; // at most once an hour
     public const REFRESH_INTERVAL = 60;     // "Refresh from Atlas" at most once a minute
+    public const INDEX_WARN_AGE = 36 * 3600;
 
     /** @var callable */
     public $now;
@@ -496,6 +567,7 @@ final class AtlasListsSource implements CandidateSource
         private string $profileUrlTemplate = 'https://my.recruitwithatlas.com/people-v2?profile={id}',
         private ?string $mapFile = null,
         private ?string $stateFile = null,
+        private ?string $storageDir = null,
     ) {
         $this->now = fn () => time();
     }
@@ -505,10 +577,45 @@ final class AtlasListsSource implements CandidateSource
         return $this->map;
     }
 
+    public function client(): AtlasClient
+    {
+        return $this->client;
+    }
+
+    public function profileUrl(string $personId): string
+    {
+        return str_replace('{id}', rawurlencode($personId), $this->profileUrlTemplate);
+    }
+
     public function match(string $title, string $subGroup = '', string $roleGroup = ''): array
     {
         $this->discover();
         return ListMap::match($this->map, $title, $subGroup, $roleGroup);
+    }
+
+    /** The title index builder for this source's storage (null in tests that don't use storage). */
+    public function indexBuilder(): ?IndexBuilder
+    {
+        return $this->storageDir ? new IndexBuilder($this->client, $this->map, $this->storageDir, $this->dictionary()) : null;
+    }
+
+    /** The JD dictionary (storage/jd-dictionary.json): skills vocabulary of the index, rule-based JD parsing. */
+    public function dictionary(): array
+    {
+        return $this->storageDir ? JdDictionary::load($this->storageDir)['dict'] : JdDictionary::default();
+    }
+
+    public function index(): ?TitleIndex
+    {
+        return $this->storageDir ? TitleIndex::load($this->storageDir . '/atlas-title-index.json') : null;
+    }
+
+    /** "ready" | "building" | "missing" */
+    private function indexState(): string
+    {
+        if ($this->index()) return 'ready';
+        $st = $this->storageDir ? (JsonStore::read($this->storageDir . '/atlas-index-build.json', []) ?: []) : [];
+        return ($st['status'] ?? '') === 'running' ? 'building' : 'missing';
     }
 
     private function state(): array
@@ -600,7 +707,7 @@ final class AtlasListsSource implements CandidateSource
                 $id = '';
                 foreach ($all as $lid => $l) if (strcasecmp($l['name'], (string) ($ref['name'] ?? '')) === 0) $id = (string) $lid;
             }
-            $out[] = ['type' => (string) ($ref['type'] ?? 'other'), 'id' => $id, 'name' => $id !== '' ? $all[$id]['name'] : (string) ($ref['name'] ?? ''),
+            $out[] = ['type' => (string) ($ref['type'] ?? 'pool'), 'id' => $id, 'name' => $id !== '' ? $all[$id]['name'] : (string) ($ref['name'] ?? ''),
                 'memberCount' => $id !== '' ? $all[$id]['memberCount'] : 0, 'found' => $id !== ''];
         }
         return $out;
@@ -610,7 +717,7 @@ final class AtlasListsSource implements CandidateSource
     private function memberIds(string $listId): array
     {
         $out = [];
-        for ($page = 1; $page <= 100; $page++) {
+        for ($page = 1; $page <= 200; $page++) {
             try {
                 $r = $this->client->get("/api/v1/lists/$listId/members", ['page' => $page, 'pageSize' => 100]);
             } catch (NotFoundError) {
@@ -644,18 +751,9 @@ final class AtlasListsSource implements CandidateSource
         return $members;
     }
 
-    private static function countsFrom(array $members, array $lists): array
+    private static function listsView(array $lists): array
     {
-        $p = 0;
-        $f = 0;
-        foreach ($members as $m) {
-            if (isset($m['types']['permanent'])) $p++;
-            if (isset($m['types']['freelance'])) $f++;
-        }
-        return [
-            'n' => count($members), 'p' => $p, 'f' => $f,
-            'lists' => array_map(fn ($l) => ['family' => $l['family'], 'type' => $l['type'], 'name' => $l['name'], 'count' => $l['memberCount'], 'found' => $l['found']], $lists),
-        ];
+        return array_map(fn ($l) => ['family' => $l['family'], 'type' => $l['type'], 'name' => $l['name'], 'count' => $l['memberCount'], 'found' => $l['found']], $lists);
     }
 
     private static function countsKey(array $families): string
@@ -665,55 +763,148 @@ final class AtlasListsSource implements CandidateSource
         return 'counts:' . implode('|', $f);
     }
 
-    /** n / p / f (deduplicated) for these families. Cached 6 h: numbers and list names only. */
+    /**
+     * Pool size (people on the families' lists, each once) and per-type counts. One list -> its member count;
+     * several -> deduplicated union of members. Cached 6 h: numbers and list names only.
+     */
     public function counts(array $families): array
     {
-        if (!$families) return ['n' => 0, 'p' => 0, 'f' => 0, 'lists' => []];
+        if (!$families) return ['n' => 0, 'types' => [], 'lists' => []];
         $this->discover();
         $key = self::countsKey($families);
         $cached = $this->cache->get($key);
         if (is_array($cached)) return $cached;
         $lists = [];
-        $counts = self::countsFrom($this->union($families, $lists), $lists);
+        foreach ($families as $fam) foreach ($this->familyLists($fam) as $l) $lists[] = $l + ['family' => $fam];
+        $found = array_values(array_filter($lists, fn ($l) => $l['found']));
+        if (count($found) === 1) {
+            $counts = ['n' => $found[0]['memberCount'], 'types' => [$found[0]['type'] => $found[0]['memberCount']], 'lists' => self::listsView($lists)];
+        } else {
+            $members = $this->union($families, $lists);
+            $types = [];
+            foreach ($members as $m) foreach (array_keys($m['types']) as $t) $types[$t] = ($types[$t] ?? 0) + 1;
+            $counts = ['n' => count($members), 'types' => $types, 'lists' => self::listsView($lists)];
+        }
         $this->cache->set($key, $counts);
         return $counts;
     }
 
-    public function search(string $title, string $subGroup, string $roleGroup, int $page): array
+    private function foundListIds(array $families): array
     {
-        $this->discover();
-        $m = ListMap::match($this->map, $title, $subGroup, $roleGroup, true);
-        $base = ['families' => $m['families'], 'reason' => $m['reason'], 'normalisedTitle' => $m['normalisedTitle']];
-        if (!$m['families']) return $base + ['counts' => ['n' => 0, 'p' => 0, 'f' => 0, 'lists' => []], 'members' => [], 'page' => 1, 'totalPages' => 0];
+        $ids = [];
+        foreach ($families as $fam) foreach ($this->familyLists($fam) as $l) if ($l['found']) $ids[] = $l['id'];
+        return array_values(array_unique($ids));
+    }
 
-        $lists = [];
-        $members = $this->union($m['families'], $lists);
-        $counts = self::countsFrom($members, $lists);
-        $this->cache->set(self::countsKey($m['families']), $counts); // keep badges in step with the page
-        uasort($members, fn ($a, $b) => strcmp($b['addedAt'], $a['addedAt']));
-        $totalPages = max(1, (int) ceil(count($members) / self::PAGE_SIZE));
-        $page = max(1, min($page, $totalPages));
-        $slice = array_slice($members, ($page - 1) * self::PAGE_SIZE, self::PAGE_SIZE, true);
-
-        $rows = [];
-        foreach ($slice as $pid => $mm) {
-            $row = ['id' => $pid, 'types' => array_keys($mm['types']), 'addedAt' => $mm['addedAt'],
-                'profileUrl' => str_replace('{id}', rawurlencode($pid), $this->profileUrlTemplate)];
-            try {
-                $p = $this->client->get("/api/v1/people/$pid")['data'] ?? [];
-                $addr = $p['address'] ?? [];
-                $loc = trim(implode(', ', array_filter([$addr['city'] ?? null, $addr['country'] ?? null])));
-                $rows[] = $row + [
-                    'name' => trim(($p['firstName'] ?? '') . ' ' . ($p['lastName'] ?? '')) ?: '(no name)',
-                    'role' => (string) ($p['headline']['role'] ?? ''), 'company' => (string) ($p['headline']['company'] ?? ''),
-                    'location' => $loc !== '' ? $loc : (string) ($addr['formattedAddress'] ?? ''),
-                    'updatedAt' => substr((string) ($p['updatedAt'] ?? ''), 0, 10),
-                ];
-            } catch (NotFoundError) {
-                $rows[] = $row + ['name' => '(no longer in Atlas)', 'role' => '', 'company' => '', 'location' => '', 'updatedAt' => ''];
+    /** Title words to look for in the pool: the family keywords found in the title, else the whole title. */
+    public static function searchTerms(array $map, string $normTitle, array $families): array
+    {
+        if ($normTitle === '') return [];
+        $terms = [];
+        foreach ($families as $fam) {
+            foreach ($map['families'][$fam]['keywords'] ?? [] as $k) {
+                $k = ListMap::normaliseTitle((string) $k, [], false);
+                if ($k !== '' && preg_match('~(?<![\p{L}\p{N}])' . preg_quote($k, '~') . '(?![\p{L}\p{N}])~u', $normTitle)) $terms[] = $k;
             }
         }
-        return $base + ['counts' => $counts, 'members' => $rows, 'page' => $page, 'totalPages' => $totalPages];
+        return $terms ? array_values(array_unique($terms)) : [$normTitle];
+    }
+
+    /**
+     * Badge / header numbers: m = people in the matched pool(s), n = of those, how many have a matching current title
+     * (from the title index; null while it is not built yet).
+     */
+    public function summary(string $title, string $subGroup = '', string $roleGroup = '', bool $byListName = false): array
+    {
+        $this->discover();
+        $m = ListMap::match($this->map, $title, $subGroup, $roleGroup, $byListName);
+        $base = ['families' => $m['families'], 'reason' => $m['reason'], 'normalisedTitle' => $m['normalisedTitle']];
+        if (!$m['families']) return $base + ['none' => true, 'terms' => [], 'm' => 0, 'n' => 0, 'index' => $this->indexState(), 'lists' => []];
+        $terms = self::searchTerms($this->map, $m['normalisedTitle'], $m['families']);
+        $idx = $this->index();
+        if ($idx) {
+            $ids = $this->foundListIds($m['families']);
+            $pool = $idx->inLists($ids);
+            $lists = [];
+            foreach ($m['families'] as $fam) foreach ($this->familyLists($fam) as $l) $lists[] = $l + ['family' => $fam];
+            return $base + ['terms' => $terms, 'm' => count($pool), 'n' => $m['normalisedTitle'] === '' ? null : count(TitleIndex::matching($pool, $terms)),
+                'index' => 'ready', 'indexBuiltAt' => gmdate('c', $idx->builtAt), 'lists' => self::listsView($lists)];
+        }
+        $c = $this->counts($m['families']);
+        return $base + ['terms' => $terms, 'm' => $c['n'], 'n' => null, 'index' => $this->indexState(), 'lists' => $c['lists']];
+    }
+
+    /**
+     * "Already in Atlas": which of these LinkedIn profile URLs exist in Atlas (one read-only GET /people/search with the
+     * exact URLs). @param string[] $urls like "linkedin.com/in/jane-doe" @return array<string,string> slug => Atlas person id
+     */
+    public function findByLinkedIn(array $urls): array
+    {
+        $urls = array_values(array_unique(array_filter($urls)));
+        if (!$urls) return [];
+        $out = [];
+        foreach (array_chunk($urls, 25) as $chunk) {
+            try {
+                $r = $this->client->get('/api/v1/people/search', ['linkedinUrls' => implode(',', $chunk)]);
+            } catch (NotFoundError) {
+                continue;
+            }
+            foreach ($r['data'] ?? [] as $p) {
+                foreach ($p['identities'] ?? [] as $idn) {
+                    if (preg_match('~linkedin\.com/in/([^/?#]+)~i', (string) ($idn['value'] ?? ''), $m) && AtlasGuard::isUuid((string) ($p['id'] ?? ''))) {
+                        $out[Phrases::lower(rawurldecode($m[1]))] = (string) $p['id'];
+                    }
+                }
+            }
+        }
+        return $out;
+    }
+
+    /** One person's card, fetched live from Atlas (never stored). */
+    public function personRow(string $pid, array $extra = []): array
+    {
+        $row = ['id' => $pid, 'profileUrl' => $this->profileUrl($pid)] + $extra;
+        try {
+            $p = $this->client->get("/api/v1/people/$pid")['data'] ?? [];
+            $addr = $p['address'] ?? [];
+            $loc = trim(implode(', ', array_filter([$addr['city'] ?? null, $addr['country'] ?? null])));
+            return $row + [
+                'name' => trim(($p['firstName'] ?? '') . ' ' . ($p['lastName'] ?? '')) ?: '(no name)',
+                'role' => (string) ($p['headline']['role'] ?? ''), 'company' => (string) ($p['headline']['company'] ?? ''),
+                'location' => $loc !== '' ? $loc : (string) ($addr['formattedAddress'] ?? ''),
+                'updatedAt' => substr((string) ($p['updatedAt'] ?? ''), 0, 10),
+            ];
+        } catch (NotFoundError) {
+            return $row + ['name' => '(no longer in Atlas)', 'role' => '', 'company' => '', 'location' => '', 'updatedAt' => ''];
+        }
+    }
+
+    /**
+     * Candidates page. With the title index: people in the pool whose current title matches (or the whole pool with
+     * $all), newest first. Without it: the whole pool from the lists, with "title index building…".
+     */
+    public function search(string $title, string $subGroup, string $roleGroup, int $page, bool $all = false): array
+    {
+        $s = $this->summary($title, $subGroup, $roleGroup, true);
+        if (!empty($s['none'])) return $s + ['members' => [], 'page' => 1, 'totalPages' => 0, 'showing' => 'none'];
+        $idx = $this->index();
+        if ($idx) {
+            $pool = $idx->inLists($this->foundListIds($s['families']));
+            $showing = ($all || $s['n'] === null) ? 'pool' : 'matching';
+            $entries = $showing === 'pool' ? TitleIndex::newestFirst($pool) : TitleIndex::matching($pool, $s['terms']);
+            $ids = array_map(fn ($e) => [(string) $e['personId'], ['hasCv' => (bool) ($e['hasCv'] ?? false), 'skills' => $e['skills'] ?? []]], $entries);
+        } else {
+            $lists = [];
+            $members = $this->union($s['families'], $lists);
+            uasort($members, fn ($a, $b) => strcmp($b['addedAt'], $a['addedAt']));
+            $ids = array_map(fn ($pid) => [(string) $pid, []], array_keys($members));
+            $showing = 'pool';
+        }
+        $totalPages = max(1, (int) ceil(count($ids) / self::PAGE_SIZE));
+        $page = max(1, min($page, $totalPages));
+        $rows = [];
+        foreach (array_slice($ids, ($page - 1) * self::PAGE_SIZE, self::PAGE_SIZE) as [$pid, $extra]) $rows[] = $this->personRow($pid, $extra);
+        return $s + ['members' => $rows, 'page' => $page, 'totalPages' => $totalPages, 'showing' => $showing];
     }
 
     public function cvUrl(string $personId): ?string
@@ -726,7 +917,7 @@ final class AtlasListsSource implements CandidateSource
         return (is_string($url) && preg_match('~^https://~i', $url)) ? $url : null;
     }
 
-    /** /lists page: every family with its lists, member counts (from the list cache), review state. */
+    /** /lists page: every family with its lists, member counts (from the list cache), review state, index status. */
     public function mapView(): array
     {
         $this->discover();
@@ -737,7 +928,7 @@ final class AtlasListsSource implements CandidateSource
             foreach ($f['lists'] as $l) {
                 $id = (string) ($l['id'] ?? '');
                 $inAtlas = $id !== '' && isset($all[$id]);
-                $lists[] = ['id' => $id, 'name' => (string) ($l['name'] ?? ''), 'type' => (string) ($l['type'] ?? 'other'),
+                $lists[] = ['id' => $id, 'name' => (string) ($l['name'] ?? ''), 'type' => (string) ($l['type'] ?? 'pool'),
                     'count' => $inAtlas ? $all[$id]['memberCount'] : null, 'missing' => !$inAtlas || ($l['status'] ?? '') === 'missing',
                     'auto' => !empty($l['auto']), 'addedAt' => $l['addedAt'] ?? null];
             }
@@ -745,9 +936,12 @@ final class AtlasListsSource implements CandidateSource
                 'roleGroups' => $f['roleGroups'], 'auto' => !empty($f['auto']), 'reviewed' => !array_key_exists('reviewed', $f) || $f['reviewed'] === true];
         }
         $st = $this->state();
+        $b = $this->indexBuilder();
         return ['families' => $families, 'ignoredLists' => $this->map['ignoredLists'],
+            'retiredLists' => array_map(fn ($l) => ['name' => (string) ($l['name'] ?? '')], $this->map['retiredLists'] ?? []),
             'discoveredAt' => isset($st['discoveredAt']) ? gmdate('c', (int) $st['discoveredAt']) : null,
-            'refreshedAt' => isset($st['refreshedAt']) ? gmdate('c', (int) $st['refreshedAt']) : null];
+            'refreshedAt' => isset($st['refreshedAt']) ? gmdate('c', (int) $st['refreshedAt']) : null,
+            'index' => $b ? $b->status() : null];
     }
 
     /** Save edits to one family's keywords / Role Sub-Groups (/lists page). Only the app's own storage is written. */
@@ -764,7 +958,7 @@ final class AtlasListsSource implements CandidateSource
                 if (strlen($s) > 100) throw new ValidationError("$what: \"" . substr($s, 0, 30) . "…\" is too long");
                 if (!in_array($s, $out, true)) $out[] = $s;
             }
-            if (count($out) > 60) throw new ValidationError("$what: at most 60 entries");
+            if (count($out) > 100) throw new ValidationError("$what: at most 100 entries");
             return $out;
         };
         // lower-case first, then de-duplicate ("SAP Consultant" and "sap consultant" are the same keyword)
@@ -796,16 +990,31 @@ final class AtlasListsSource implements CandidateSource
         }
         try {
             $missing = [];
-            $found = 0;
+            $found = [];
             $unreviewed = 0;
             foreach ($this->map['families'] ?? [] as $fam => $f) {
                 if (($f['reviewed'] ?? true) === false) $unreviewed++;
-                foreach ($this->familyLists((string) $fam) as $l) $l['found'] ? $found++ : $missing[] = $l['name'];
+                foreach ($this->familyLists((string) $fam) as $l) $l['found'] ? $found[] = $l['name'] : $missing[] = $l['name'];
             }
-            $rows[] = ['Atlas lists in the map', $missing ? 'WARN' : 'OK', "$found found" . ($missing ? '; missing in Atlas or not visible to this key: ' . implode('; ', $missing) : '')];
+            $pools = count($found);
+            $rows[] = ['Atlas pools found', $missing ? 'WARN' : 'OK', "$pools found" . ($missing ? '; missing in Atlas or not visible to this key: ' . implode('; ', $missing) : '')];
             if ($unreviewed) $rows[] = ['Atlas families to review', 'WARN', "$unreviewed new family(ies) created automatically: review them on /lists"];
         } catch (\Throwable $e) {
-            $rows[] = ['Atlas lists in the map', 'FAIL', $e->getMessage()];
+            $rows[] = ['Atlas pools found', 'FAIL', $e->getMessage()];
+        }
+        if ($this->storageDir) {
+            $idx = $this->index();
+            $b = $this->indexBuilder()->status();
+            if (!$idx) {
+                $rows[] = ['Atlas title index', 'WARN', $b['state'] === 'running' ? "building: {$b['done']} of {$b['total']} people" : 'not built yet: run private/bin/atlas-index.php (cron) or "Rebuild index" on /lists'];
+            } else {
+                $age = ($this->now)() - $idx->builtAt;
+                $rows[] = ['Atlas title index age', $age > self::INDEX_WARN_AGE ? 'WARN' : 'OK', 'built ' . gmdate('Y-m-d H:i', $idx->builtAt) . ' UTC (' . round($age / 3600, 1) . ' h ago)' . ($age > self::INDEX_WARN_AGE ? ': older than 36 h, check the cron job' : '')];
+                $rows[] = ['Atlas title index entries', count($idx->entries) ? 'OK' : 'WARN', count($idx->entries) . ' people in ' . count($idx->pools) . ' pool(s)'];
+                $first = $idx->entries[0] ?? [];
+                $missingFields = array_values(array_diff(TitleIndex::FIELDS, array_keys($first)));
+                $rows[] = ['Atlas title index fields', !$first || $missingFields ? 'WARN' : 'OK', !$first ? 'no entries' : ($missingFields ? 'missing: ' . implode(', ', $missingFields) . ' (rebuild the index)' : implode(', ', TitleIndex::FIELDS))];
+            }
         }
         return $rows;
     }
@@ -818,6 +1027,7 @@ final class MockAtlas
     public array $lists = [];
     private array $people = [];
     public int $calls = 0;
+    public array $searches = [];
 
     public static function uuid(string $seed): string
     {
@@ -825,38 +1035,84 @@ final class MockAtlas
         return substr($h, 0, 8) . '-' . substr($h, 8, 4) . '-4' . substr($h, 13, 3) . '-a' . substr($h, 17, 3) . '-' . substr($h, 20, 12);
     }
 
+    /** Fictional current titles and skills per pool (by family name). */
+    private const TITLES = [
+        'Cyber Security' => ['Senior Security Architect', 'SOC Analyst', 'Penetration Tester', 'IAM Engineer', 'GRC Consultant', 'CISO', 'Security Engineer', 'Cyber Security Consultant'],
+        'Infrastructure & Cloud' => ['Cloud Engineer', 'Network Engineer', 'DevOps Engineer', 'Systems Administrator', 'Azure Cloud Architect'],
+        'Defence & Public Sector' => ['Cyber Range Engineer', 'Defence Analyst', 'Research Scientist', 'Public Sector IT Consultant'],
+        'Software & Architecture' => ['Software Architect', '.NET Developer', 'Full Stack Developer', 'Solution Architect', 'Java Developer'],
+        'Leadership & Management' => ['CTO', 'IT Manager', 'Head of IT', 'Engineering Manager'],
+        'Data & AI' => ['Data Engineer', 'ML Engineer', 'Data Architect', 'Data Scientist', 'GenAI Engineer'],
+    ];
+    private const SKILLS = [
+        'Cyber Security' => 'Sentinel, Splunk, ISO 27001, NIS2, CISSP, penetration testing, CyberArk, Okta, incident response',
+        'Infrastructure & Cloud' => 'Azure, AWS, Kubernetes, Terraform, Cisco, VMware, Linux, M365',
+        'Defence & Public Sector' => 'NATO, security clearance, cyber range exercises, Python, risk management',
+        'Software & Architecture' => 'C#, .NET, Java, React, TypeScript, TOGAF, Azure, Docker',
+        'Leadership & Management' => 'ITIL, Prince2, budget ownership, agile, vendor management',
+        'Data & AI' => 'Databricks, Python, Spark, Power BI, machine learning, LLM, PyTorch, Snowflake',
+    ];
+
     public function __construct(array $map)
     {
         $map = ListMap::upgrade($map);
-        $cities = ['Brussels, Belgium', 'Antwerp, Belgium', 'Ghent, Belgium', 'Leuven, Belgium', 'Liège, Belgium', 'Mechelen, Belgium'];
+        $cities = ['Brussels, Belgium', 'Antwerp, Belgium', 'Ghent, Belgium', 'Leuven, Belgium', 'Liège, Belgium', 'Mechelen, Belgium', 'Rotterdam, Netherlands', 'Lille, France'];
         $pool = [];
         for ($i = 1; $i <= 160; $i++) {
             $id = self::uuid("person-$i");
             [$city, $country] = explode(', ', $cities[$i % count($cities)]);
             $this->people[$id] = ['id' => $id, 'firstName' => 'Example', 'lastName' => sprintf('Person %03d', $i),
+                'identities' => [['type' => 'email', 'value' => sprintf('example.person%03d@mail.example', $i), 'isPersonal' => true, 'isPrimary' => true],
+                    ['type' => 'linkedin', 'value' => sprintf('https://www.linkedin.com/in/example-person-%03d', $i), 'isPersonal' => false, 'isPrimary' => false],
+                    ['type' => 'phone', 'value' => sprintf('+32 470 00 %02d %02d', intdiv($i, 100), $i % 100), 'isPersonal' => true, 'isPrimary' => false]],
                 'headline' => ['role' => '', 'company' => sprintf('Example Company %02d', $i % 37)],
                 'address' => ['city' => $city, 'country' => $country, 'formattedAddress' => "$city, $country"],
+                'experience' => [], 'education' => [['institutionName' => 'Example University', 'degree' => 'MSc', 'fieldOfStudy' => 'Computer Science']],
+                'compensation' => [['type' => 'expected', 'expectedSalaryMin' => 60000 + $i * 100]],
+                'customAttributes' => [['attributeId' => 'a1', 'attributeName' => 'Private notes', 'attributeType' => 'text', 'values' => ["Secret note about person $i"]]],
                 'updatedAt' => sprintf('2026-%02d-%02dT10:00:00Z', 1 + $i % 9, 1 + $i % 27), 'hasCv' => $i % 3 === 0];
             $pool[] = $id;
         }
         $n = 0;
         foreach ($map['families'] ?? [] as $fam => $f) {
             $n++;
-            $size = 4 + ($n * 7) % 23;
-            $start = ($n * 13) % 140;
-            $perm = array_slice($pool, $start, $size);
-            $free = array_merge(array_slice($perm, 0, 2), array_slice($pool, ($start + $size) % 150, 2 + $n % 4)); // 2 people on both lists
-            foreach ($f['lists'] as $l) {
-                $members = ($l['type'] ?? '') === 'freelance' ? $free : $perm;
-                $name = (string) ($l['name'] ?? "$fam – " . ucfirst((string) ($l['type'] ?? 'other')));
+            $titles = self::TITLES[$fam] ?? [preg_replace('/^Microsoft – /', '', (string) $fam)];
+            $skills = self::SKILLS[$fam] ?? 'Python, SQL';
+            $size = $n === 1 ? 55 : 15 + ($n * 7) % 20; // Cyber Security is by far the largest pool, as in Atlas
+            $start = $n === 1 ? 0 : ($n * 23) % 120;
+            $members = array_slice($pool, $start, $size);
+            foreach ($f['lists'] as $li => $l) {
+                $listMembers = $li === 0 ? $members : array_merge(array_slice($members, 0, 2), array_slice($pool, ($start + $size) % 150, 2 + $n % 4));
+                $name = (string) ($l['name'] ?? "$fam – " . ucfirst((string) ($l['type'] ?? 'pool')));
                 $lid = ($l['id'] ?? '') !== '' ? (string) $l['id'] : self::uuid("list-$name");
-                $this->lists[$lid] = ['name' => $name, 'members' => $members];
-                foreach ($members as $pid) if ($this->people[$pid]['headline']['role'] === '') $this->people[$pid]['headline']['role'] = preg_replace('/^Microsoft – /', '', (string) $fam);
+                $this->lists[$lid] = ['name' => $name, 'members' => $listMembers];
+                foreach ($listMembers as $k => $pid) {
+                    if ($this->people[$pid]['headline']['role'] !== '') continue;
+                    $title = $titles[$k % count($titles)];
+                    $this->people[$pid]['headline']['role'] = $title;
+                    $this->people[$pid]['experience'] = [
+                        ['companyName' => $this->people[$pid]['headline']['company'], 'role' => $title, 'description' => "Hands-on with $skills. Contact me on example.person@mail.example", 'startDate' => '2022-01-01', 'endDate' => null],
+                        ['companyName' => 'Earlier Example BV', 'role' => 'IT Consultant', 'description' => 'Linux and SQL support', 'startDate' => '2018-03-01', 'endDate' => '2021-12-31'],
+                    ];
+                }
             }
+        }
+        foreach ($map['retiredLists'] ?? [] as $k => $rl) { // the old Permanent/Freelance lists may still exist in Atlas
+            if (($rl['id'] ?? '') !== '' && $k % 2 === 0) $this->lists[(string) $rl['id']] = ['name' => (string) $rl['name'], 'members' => array_slice($pool, $k, 3)];
         }
         foreach ($map['ignoredLists'] ?? [] as $ig) {
             $this->lists[(string) ($ig['id'] ?: self::uuid('list-ignored'))] = ['name' => (string) $ig['name'], 'members' => array_slice($pool, 0, 5)];
         }
+    }
+
+    /** Mock CV text for the fake download links (ATLAS_BACKEND=mock): fictional, no contact details. */
+    public static function cvText(string $url): string
+    {
+        $n = hexdec(substr(md5($url), 0, 4)) % 3;
+        $skills = ['Azure, Kubernetes, Terraform, ISO 27001, Sentinel, Splunk', 'Python, Databricks, Spark, Power BI, machine learning', 'C#, .NET, Java, React, TOGAF, Docker'][$n];
+        return "Curriculum vitae (example)\n\nProfile\nExperienced IT professional based in Belgium with eight years of hands-on project work for large organisations.\n\n"
+            . "Skills\n$skills, agile delivery, stakeholder management.\n\nLanguages\nDutch (native), French (fluent), English (fluent).\n\n"
+            . "Experience\n2022 - present: lead role in a security and cloud programme.\n2018 - 2021: consultant on infrastructure and data projects.\n";
     }
 
     /** Test helper: a list created in Atlas. */
@@ -898,6 +1154,20 @@ final class MockAtlas
                     'person' => ['id' => $pid, 'firstName' => $p['firstName'], 'lastName' => $p['lastName']]];
             }
             return $ok($paged($rows));
+        }
+        if ($path === '/api/v1/people/search') {
+            $want = array_filter(array_map(fn ($u) => preg_match('~linkedin\.com/in/([^/?#]+)~i', $u, $mm) ? strtolower($mm[1]) : null, explode(',', (string) ($q['linkedinUrls'] ?? ''))));
+            $rows = [];
+            foreach ($this->people as $p) {
+                foreach ($p['identities'] as $idn) {
+                    if ($idn['type'] === 'linkedin' && preg_match('~/in/([^/?#]+)~', $idn['value'], $mm) && in_array(strtolower($mm[1]), $want, true)) {
+                        $rows[] = ['id' => $p['id'], 'firstName' => $p['firstName'], 'lastName' => $p['lastName'], 'headlineRole' => $p['headline']['role'], 'headlineCompanyName' => $p['headline']['company'],
+                            'identities' => [['identityId' => 'i-' . $p['id'], 'type' => 'linkedin', 'value' => $idn['value'], 'active' => true, 'inactiveReason' => null]]];
+                    }
+                }
+            }
+            $this->searches[] = $q['linkedinUrls'] ?? '';
+            return $ok(['status' => 'success', 'data' => $rows]);
         }
         if (preg_match('~^/api/v1/people/([^/]+)$~', $path, $m)) {
             if (!isset($this->people[$m[1]])) return $notFound;
@@ -947,6 +1217,6 @@ final class Atlas
         }
         return new AtlasListsSource($client, $loaded['map'], new TtlFileCache($c['STORAGE_DIR'] . '/atlas-cache', self::CACHE_TTL),
             ($c['ATLAS_PROFILE_URL'] ?? '') ?: self::DEFAULT_PROFILE_URL,
-            $loaded['error'] === null && is_file($storageMap) ? $storageMap : null, $c['STORAGE_DIR'] . '/atlas-state.json');
+            $loaded['error'] === null && is_file($storageMap) ? $storageMap : null, $c['STORAGE_DIR'] . '/atlas-state.json', $c['STORAGE_DIR']);
     }
 }

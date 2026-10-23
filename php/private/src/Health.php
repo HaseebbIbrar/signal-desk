@@ -10,7 +10,50 @@ final class Health
     /** @return array<int,array{0:string,1:string,2:string}> [check, status OK|WARN|FAIL, detail] */
     public static function checks(array $config, string $privateDir, string $layout, string $origin): array
     {
-        return array_merge(self::baseChecks($config, $privateDir, $layout, $origin), self::atlasChecks($config, $privateDir));
+        return array_merge(self::baseChecks($config, $privateDir, $layout, $origin), self::atlasChecks($config, $privateDir), self::aiChecks($config), self::prospeoChecks($config));
+    }
+
+    /** "In the market" (Prospeo): mode, key set (never shown), reachable via the free account-information, credits left. */
+    public static function prospeoChecks(array $config, ?ProspeoClient $client = null): array
+    {
+        $mode = Prospeo::mode($config);
+        if ($mode === 'off') return [['Prospeo (In the market)', 'WARN', 'off: set PROSPEO_API_KEY in config.php to enable it']];
+        $rows = [['Prospeo (In the market)', 'OK', $mode === 'mock' ? 'mock (fake people)' : 'live']];
+        if ($mode === 'prospeo') $rows[] = ['PROSPEO_API_KEY', ($config['PROSPEO_API_KEY'] ?? '') !== '' ? 'OK' : 'FAIL', ($config['PROSPEO_API_KEY'] ?? '') !== '' ? 'set' : 'missing'];
+        try {
+            $client ??= Prospeo::client($config);
+            $r = $client->call('GET', '/account-information')['response'] ?? [];
+            $left = (int) ($r['remaining_credits'] ?? 0);
+            $rows[] = ['Prospeo API reachable', 'OK', 'plan ' . ($r['current_plan'] ?? '?')];
+            $rows[] = ['Prospeo credits left', $left < 1000 ? 'WARN' : 'OK', number_format($left) . ($left < 1000 ? ' (under 1,000: top up soon)' : '')];
+        } catch (\Throwable $e) {
+            $rows[] = ['Prospeo API reachable', 'FAIL', $e->getMessage()];
+        }
+        $l = Prospeo::ledger($config);
+        $rows[] = ['Prospeo credits used today', $l->used() >= $l->cap() ? 'WARN' : 'OK', $l->used() . ' of ' . $l->cap() . ' (daily cap)'];
+        return $rows;
+    }
+
+    /** JD matching (Anthropic): mode, key set (never shown), reachable (no tokens spent), this month's spend. */
+    public static function aiChecks(array $config, ?Llm $llm = null): array
+    {
+        $mode = Llms::mode($config);
+        if ($mode === 'off') return [['AI scoring', 'OK', 'off (rule-based)']];
+        $rows = [['AI scoring', 'OK', $mode === 'mock' ? 'mock (fake AI)' : 'on (Anthropic)']];
+        if ($mode === 'anthropic') $rows[] = ['ANTHROPIC_API_KEY', ($config['ANTHROPIC_API_KEY'] ?? '') !== '' ? 'OK' : 'FAIL', ($config['ANTHROPIC_API_KEY'] ?? '') !== '' ? 'set' : 'missing'];
+        try {
+            $llm ??= Llms::build($config);
+            if ($llm) {
+                [$st, $detail] = $llm->ping();
+                $rows[] = ['Anthropic API reachable', $st, $detail];
+            }
+        } catch (\Throwable $e) {
+            $rows[] = ['Anthropic API reachable', 'FAIL', $e->getMessage()];
+        }
+        $g = Llms::spendGuard($config);
+        $spent = $g->spent();
+        $rows[] = ['AI spend this month', $spent >= $g->limit() ? 'WARN' : 'OK', sprintf('€%.2f of €%.2f', $spent, $g->limit())];
+        return $rows;
     }
 
     /** Candidate Desk (Atlas): mode, API key, list map, API reachable, lists visible. Never shows the key. */

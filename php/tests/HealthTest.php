@@ -66,7 +66,7 @@ test('Health: layout B self-test maps each HTTP result per file', function () {
 
     $html = Health::render($checks, 'B');
     ok(str_contains($html, '1 check(s) failed.'), 'summary counts the FAIL');
-    $warns = count(array_filter($checks, fn ($c) => $c[1] === 'WARN')); // 3 above + "HTTPS" (CLI is plain HTTP) + "Atlas off"
-    eq(5, $warns);
+    $warns = count(array_filter($checks, fn ($c) => $c[1] === 'WARN')); // 3 above + "HTTPS" (CLI is plain HTTP) + "Atlas off" + "AI off"
+    eq(6, $warns);
     ok(str_contains($html, "$warns check(s) could not be verified (WARN)"), 'summary counts the WARNs');
 });

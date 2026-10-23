@@ -41,4 +41,20 @@ return [
     'ATLAS_API_KEY' => '',
     'ATLAS_BASE_URL' => 'https://api.recruitwithatlas.com',
     'ATLAS_PROFILE_URL' => 'https://my.recruitwithatlas.com/people-v2?profile={id}',
+
+    // Optional AI scoring for JD matching (Anthropic API). OFF by default: JD matching is rule-based and free.
+    // To switch it on later: 'anthropic' plus a key from console.anthropic.com. 'mock' = fake AI (refused in production).
+    // ANTHROPIC_MONTHLY_LIMIT_EUR: AI calls stop for the month once this is spent (default 50).
+    'ANTHROPIC_BACKEND' => 'off',
+    'ANTHROPIC_API_KEY' => '',
+    'ANTHROPIC_MODEL' => 'claude-opus-5-5',
+    'ANTHROPIC_MONTHLY_LIMIT_EUR' => '50',
+    'ANTHROPIC_USD_TO_EUR' => '0.92',
+
+    // "In the market" (Prospeo people search). Key: app.prospeo.io -> API. Searches cost 1 credit per page of 25,
+    // revealing an email 1 credit, a mobile 10. PROSPEO_DAILY_CREDIT_CAP: credits the whole app may spend per day.
+    // PROSPEO_BACKEND: '' = on when PROSPEO_API_KEY is set; 'mock' = fake people (refused in production); 'off'.
+    'PROSPEO_BACKEND' => '',
+    'PROSPEO_API_KEY' => '',
+    'PROSPEO_DAILY_CREDIT_CAP' => '200',
 ];

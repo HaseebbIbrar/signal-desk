@@ -106,11 +106,12 @@ Use fake data first; nothing touches SharePoint.
 8. **Verified:** open **Edit LinkedIn (column M)** on a waiting card, paste `linkedin.com/in/test-person` and click **Save**. You should see "✓ Saved to master sheet", and the card moves to *Ready to review*. A `linkedin.com/company/...` link is refused.
 9. **Verified:** on a job with two people, **✓ Approve → Decision Makers** each card separately. The heading goes "1 of 2 sent" → "2 of 2 sent", and each card shows **Sent ✓ <today>**. **Undo** removes the row just added.
 10. **Verified:** **+ Add another decision maker** on a job: paste a new person's LinkedIn and click **Add**. A new card appears (a new verify-tab row). Pasting someone already listed for that job is refused.
-11. **Candidates (Atlas):** set `'ATLAS_BACKEND' => 'mock'` in `config.php` to test with fake candidates.
-    - Signals and Verified cards show **"Atlas: N (P / F)"** (or "No matching list").
-    - Clicking a badge opens **Candidates** with the role filled in.
-    - That page shows "N candidates (P permanent / F freelance)", the matched lists, and 25 people per page with **Open in Atlas** and **CV**.
-    - **Lists** shows the families. Edit a keyword and click **Save** ("✓ Saved"). **Refresh from Atlas** works once, then says to wait a minute.
+11. **Candidates (Atlas):** set `'ATLAS_BACKEND' => 'mock'` and `'PROSPEO_BACKEND' => 'mock'` in `config.php` to test with fake candidates and fake market data (no credits are used).
+    - **Lists** shows the 6 pools. Click **Rebuild index**. It builds in 20-second steps (about 40 s for the fake data) and ends with "Title index built: 138 people". A second click says to wait an hour.
+    - Signals and Verified cards show **"Atlas: N matching titles in <pool> (M in pool)"** (or "No matching list"), plus a **Match candidates** link.
+    - Clicking a badge opens **Candidates**: the matching people, 25 per page, with **Open in Atlas** and **CV**. **Show whole pool** lists everyone.
+    - **Match candidates**: the fake job URLs can't be read, so it asks you to paste a JD. Paste a JD (English, Dutch or French), click **Extract requirements**, check them, then **Find candidates**. Ranked cards show the score, ✓ matched and ✗ missing items. **Deep match in Claude** copies a prompt with person IDs only.
+    - **In the market**: click **Prepare a market search**, then **Search the market**. Five fake people show **Already in Atlas**. **Reveal contact** asks for confirmation (1 credit), then shows a fake email; **Reveal mobile** asks again (10 credits).
 12. To reset the fake data, delete `storage/mock-workbook.json`.
 
 ## 7. Switch to live
@@ -135,10 +136,25 @@ The app refuses to start if `APP_ENV=development` points at the master's item id
 
 ## Candidate Desk (Atlas, read-only)
 
-The **Candidates** page and the **"Atlas: N (P / F)"** badges use your Atlas candidate lists. Each role family has a "– Permanent" and a "– Freelance" list, for example "Security Architects – Permanent" and "Security Architects – Freelance".
+The **Candidates** page and the **Atlas** badges on Signals and Verified cards use your **6 Atlas candidate pools**. Each pool is one list with no Permanent/Freelance split:
+
+| Pool | Atlas list |
+|---|---|
+| Cyber Security | Candidates – Cyber Security |
+| Infrastructure & Cloud | Candidates – Infrastructure & Cloud |
+| Defence & Public Sector | Candidates – Defence & Public Sector |
+| Software & Architecture | Candidates – Software & Architecture |
+| Leadership & Management | Candidates – Leadership & Management |
+| Data & AI | Candidates – Data & AI |
+
+A badge reads **"Atlas: 7 matching titles in Cyber Security (2,573 in pool)"**:
+- First the signal's **pool** is found from its Role Sub-Group or job-title keywords.
+- Then the **title index** counts the people in that pool whose current title matches.
+
+Until the index is built, the badge shows the pool size with "title index building…".
 
 **Turn it on:**
-1. In Atlas go to **Settings → Integrations → API Keys** and create a key, e.g. "Signal Desk (read-only)". The key acts as its user and sees that user's own lists plus public/company-wide ones. All 47 candidate lists are public, so any agency user's key works.
+1. In Atlas go to **Settings → Integrations → API Keys** and create a key, for example "Signal Desk (read-only)". The key acts as its user. All 6 pools are public, so any agency user's key works.
 2. In `config.php`:
    ```php
    'ATLAS_BACKEND' => '',            // '' = on when the key is set; 'off' to switch the feature off
@@ -146,37 +162,191 @@ The **Candidates** page and the **"Atlas: N (P / F)"** badges use your Atlas can
    'ATLAS_BASE_URL' => 'https://api.recruitwithatlas.com',
    'ATLAS_PROFILE_URL' => 'https://my.recruitwithatlas.com/people-v2?profile={id}',
    ```
-3. Open `/health.php`. It should show **Atlas API reachable: OK** and **Atlas lists in the map: OK (46 found)**.
+3. Set up the **cron job** (next section) and build the index once: **Lists → Rebuild index**, or wait for the cron job.
+4. Open `/health.php`. It should show:
+   - **Atlas API reachable: OK**
+   - **Atlas pools found: OK (6 found)**
+   - the three **Atlas title index** rows OK
 
-**Which lists match a signal: `storage/atlas-list-map.json`.** It's created from `private/atlas-list-map.default.json` on first use. Edit it on the **Lists** page (or the copy in `storage/` over SFTP); no code changes are needed. Each family lists:
-- its **Permanent** and **Freelance** list (matched by id, or by name if the id isn't found, so renaming a list in Atlas doesn't break it);
+### Title index (nightly cron job on 20i)
+
+The index is `storage/atlas-title-index.json`. For each person in the pools it stores **only** these fields:
+- Atlas person id
+- current title, plus a lower-cased copy for matching
+- up to 5 past titles
+- skills: only words from a fixed technology/certification list
+- city and country
+- whether a CV file exists
+- which pools the person is in
+- the profile's last-updated date
+
+It never stores names, e-mail addresses, phone numbers, notes, salaries or free-text descriptions.
+
+**Set up the cron job:** in **My20i → Manage Hosting → Scheduled Tasks (Cron Jobs)**, add a task that runs **every 15 minutes**. The command is the PHP binary followed by the script's full server path:
+
+```
+php /home/sites/<site id>/signal-desk-private/bin/atlas-index.php
+```
+
+- **Layout A:** the path is next to `public_html`, as in the example above.
+- **Layout B:** the path is `…/public_html/signals/_private/bin/atlas-index.php`.
+- **Finding the full path:** My20i shows the home path under **File Manager / FTP details**.
+- **Choosing the PHP version:** 20i may show a menu, or you can type the binary instead, such as `php83`.
+
+How it behaves:
+- Each run takes at most 4 minutes, then stops. The next run carries on where it left off; progress is kept in `storage/atlas-index-build.json`.
+- Once the index is complete and less than 20 hours old, a run exits straight away. In practice it rebuilds once a day.
+- It spaces its Atlas reads to **500 per minute**, safely under Atlas's 1,200/min, so the rest of the app still has room.
+- Each person costs 2 reads: the profile, and whether a CV exists. About 3,500 people take roughly 15 minutes in total.
+- If Atlas asks it to slow down (HTTP 429), it stops and resumes on the next run.
+- Progress goes to `storage/audit.log` as counts only. Check it from SSH with `php …/bin/atlas-index.php --status`.
+
+**Rebuild index** on the Lists page starts a build straight away, at most once an hour. It keeps building in 20-second steps while the page stays open.
+
+### Which pool matches a signal: `storage/atlas-list-map.json`
+
+The file is created from `private/atlas-list-map.default.json` on first use. Edit it on the **Lists** page, or edit the copy in `storage/` over SFTP; no code changes are needed. Each pool has:
 - `roleSubGroups`: values from column R, or just their code, e.g. `"A2"`;
 - `keywords`: whole words matched in the job title, after removing gender markers like (m/f/x) and seniority words;
 - `roleGroups`: values from column G.
 
-The first rule that matches anything decides, in the order Role Sub-Group → keywords → Role Group. Several families can match, and their lists are combined. If the file is broken, `/health.php` shows FAIL and the app uses the default map.
+The first rule that matches anything decides, in the order Role Sub-Group → keywords → Role Group. Each Role Sub-Group and each keyword belongs to exactly one pool. If the file is broken, `/health.php` shows FAIL and the app uses the default map.
+
+**Upgrading from the 46 Permanent/Freelance lists:** this happens once, on the first page load after the upload.
+- The old `storage/atlas-list-map.json` is saved as `atlas-list-map.before-pools-2026-10.json`, and the new 6-pool map replaces it.
+- Keywords and Role Sub-Groups **you added yourself** move to the matching pool. Families found in Atlas since then (for example "SAP Consultants") are kept.
+- The 46 old lists become **retired lists**: they are never shown as "missing" or turned into new families.
 
 **New lists are picked up automatically.** At most once an hour the app compares Atlas's candidate lists with the map, by list id:
-- **A new list whose family already exists** (the name before "– Permanent", "– Freelance", "– Contract", etc. matches a family name) is added to that family.
-- **A new list with an unknown family** creates that family, with one keyword taken from the list name: lower-case, last word made singular (e.g. "SAP Consultants – Permanent" → keyword `sap consultant`). It is marked **New – please review**.
+- **A new list for an existing pool** is added to that pool. A list matches a pool when its name, without "Candidates –" and any "– Permanent", "– Freelance" or "– Contract" ending, is the pool's name. The app can still handle extra list types like these.
+- **A new list with an unknown name** creates a new family, with one keyword taken from the list name (lower-case, last word singular). It is marked **New – please review**.
 - **A list deleted in Atlas** is marked "missing in Atlas" and counts as 0 candidates. Nothing breaks.
-- Lists in `ignoredLists` (e.g. "To verify – Belgian eligibility") are never treated as role families.
+- Lists in `ignoredLists` (e.g. "To verify – Belgian eligibility") and `retiredLists` are never treated as families.
 
-**The Lists page** (`/lists`, login required, shown in the menu when Atlas is on):
-- Shows every family with its lists and member counts. New families are listed first, with a **New – please review** badge.
-- **Matching rules** lets you edit a family's title keywords (one per line) and Role Sub-Groups (comma-separated). **Save** writes only `storage/atlas-list-map.json` on this server, never Atlas. It also marks the family reviewed and adds an `atlas_map_edit` entry to the audit log.
-- **Refresh from Atlas** clears the cached counts and list names and checks for new lists straight away. It can be used at most once a minute.
+**The Lists page** (`/lists`, login required):
+- Shows each pool with its member count, the title-index status and the **Rebuild index** button.
+- **Matching rules:** edit a pool's keywords and Role Sub-Groups. **Save** writes only `storage/atlas-list-map.json`, never Atlas, and adds an `atlas_map_edit` audit entry.
+- **Refresh from Atlas** clears the cached counts and checks for new lists straight away. It can be used at most once a minute.
 
-The **Candidates** search box also matches list names, so typing "SAP" finds the "SAP Consultants" lists even when no job title matches.
+The **Candidates** page shows the people in the pool whose current title matches, 25 per page, newest profiles first. **Show whole pool** lists everyone in it. Names, companies and locations are fetched live from Atlas for the 25 people on screen.
 
-**Keywords are deliberately narrow.** Generic words such as "risk", "audit", "compliance", "identity" and "simulation" were replaced with phrases ("it risk", "cyber risk", "it audit", "identity and access", "cyber simulation", …). This stops jobs like "Credit Risk Analyst", "Financial Auditor" or "Simulation Engineer" being matched to security lists. If you add a keyword, prefer two words over one.
+**Keywords are deliberately narrow.** Generic words such as "risk", "audit", "identity" and "simulation" are phrases instead ("it risk", "it audit", "identity and access", "cyber simulation"…), so "Credit Risk Analyst" or "Financial Auditor" don't match. If you add a keyword, prefer two words over one.
 
-**What it reads and stores:**
-- **Reads only:** the app can only send GET requests to `/lists`, `/lists/{id}/members`, `/people/{id}`, `/files`, `/files/{id}/download` and `/users`. Anything else, including every create, update or delete, is refused in code before any request is made.
-- **Rate limits:** Atlas allows 1,200 reads per minute per agency. Badges load in batches of 10, one request at a time. On HTTP 429 the app waits for Atlas's `retryAfterSec` (up to 10 seconds) and retries; for a longer wait it shows "Atlas: busy, try later".
-- **Stored on disk:** only counts and list names, in `storage/atlas-cache/`, for 6 hours. Candidate names, roles, companies and locations are fetched live for the 25 people on screen and never written to disk.
-- **CVs:** the CV link is fetched only when you click **CV**. It's a short-lived Atlas download link.
-- **Audit log:** each Atlas call is recorded as method, endpoint pattern and status, with no ids and no names.
+### JD matching (rule-based, no paid AI)
+
+On **Candidates**, the **Match a job description** box ranks Atlas candidates for one job. The **Match candidates** link on a Signals or Verified card opens it for that job.
+
+1. **The job description.**
+   - The app tries to read the job page itself. Rules:
+     - https only, public websites only (it checks the address first)
+     - 10-second timeout, at most 500 KB
+     - HTML is stripped
+   - **LinkedIn, Indeed and Glassdoor block automated reading**, so for those, and whenever reading fails, the app asks you to paste the JD.
+2. **Extract requirements.** Signal Desk's dictionary reads the JD in English, Dutch or French. It finds:
+   - the role (via title synonyms)
+   - seniority (from title words, or years of experience)
+   - must-haves and nice-to-haves (skills and certifications)
+   - languages, location, clearance and contract type
+
+   Skills under headings such as "Requirements / Vereisten / Jouw profiel / Profil recherché / Exigé" count as **must-haves**. Skills under "Nice to have / Pluspunten / Un atout / Bij voorkeur", or on a line saying "is a plus", count as **nice-to-haves**. Skills under "What we offer / Wat bieden wij / Nous offrons" are ignored. **Check and edit the requirements** before you continue.
+3. **Find candidates.** Everyone in the matching pool is scored from the title index, 0–100:
+
+   | Part | Points | Scored on |
+   |---|---|---|
+   | Title | 35 | the person's current title (or a past title for 20) against the role and its synonyms |
+   | Must-haves | 35 | share of must-have skills found in the person's skills/titles |
+   | Nice-to-haves | 10 | share of nice-to-haves found |
+   | Seniority | 10 | seniority words in the title against the job's level |
+   | Location | 10 | same city area, same province, or elsewhere in Belgium |
+
+   The top 50 are shown 25 per page, each with the items **matched (✓)** and **missing (✗)**. Names are read live from Atlas.
+4. **Deep match in Claude** copies a prompt to the clipboard. The prompt contains:
+   - the JD, with e-mail addresses, phone numbers and links masked
+   - the requirements
+   - the pool
+   - the **top 20 Atlas person IDs**
+
+   It contains **no names**. Paste it into Claude with the **Atlas connector** switched on. Claude looks the IDs up with `getCandidateProfile` and ranks them with evidence, gaps and risks. If the browser refuses to copy, the text appears in a box to copy by hand.
+
+**The dictionary: `storage/jd-dictionary.json`.** The default is `private/jd-dictionary.default.json`, with about 480 skills and certifications plus 53 job titles with English, Dutch and French synonyms. It is updated together with the app.
+- **Your file holds only your additions.** It is created on first use with a small template. Anything in it is **added to** the default, and lists such as synonyms or aliases are combined. Example:
+  ```json
+  {
+    "titles": { "SAP Consultant": { "synonyms": ["sap fico consultant"] } },
+    "skills": { "sap fico": { "aliases": ["fico"], "category": "dev" } },
+    "remove": { "skills": ["go"] }
+  }
+  ```
+- `"remove"` switches a default entry off.
+- The skills are also the **title index's vocabulary**: after changing skills, click **Lists → Rebuild index**.
+- If the file is broken, the default is used and `/health.php` still works.
+
+**AI scoring stays off.** The earlier Anthropic code is still in the app, but `ANTHROPIC_BACKEND` is `'off'` by default, and a key on its own does not switch it on. `/health.php` shows **AI scoring: off (rule-based)**. To use it later:
+- set `'ANTHROPIC_BACKEND' => 'anthropic'` plus `ANTHROPIC_API_KEY`;
+- the AI then scores the top 40 from their Atlas profile and CV;
+- each user gets 20 matches a day, within the monthly euro budget in `ANTHROPIC_MONTHLY_LIMIT_EUR`;
+- a match costs about €1.
+
+### In the market (Prospeo)
+
+Below the Atlas results, **In the market (Prospeo)** finds people outside Atlas who fit the role.
+
+1. **Prepare a market search (free).** The requirements become Prospeo filters that you can edit before anything is spent:
+   - **job titles:** the role and its synonyms, matched as similar titles
+   - **locations:** Prospeo's exact name for the job location, looked up free with search-suggestions; Belgium when the job has none
+   - **seniority**
+   - **years of experience**
+   - **up to 5 must-have keywords**
+2. **Search the market (1 credit / 25 people).**
+   - Each card shows name, title, company, location and a LinkedIn link.
+   - A **fit score, "based on title & company only"**, comes from the same rule-based scorer.
+   - **Already in Atlas** appears when the person's exact LinkedIn URL is in Atlas. That's one read-only Atlas `GET /people/search` per page.
+   - A page Prospeo has charged you for in the last 30 days is free again.
+3. **Reveal contact.**
+   - A confirmation shows the cost first: **email, 1 credit** (nothing if no verified email is found).
+   - **Reveal mobile** is a separate button with its own confirmation, at **10 credits**.
+   - You can only reveal people who appeared in your own search results in this session.
+
+**Turn it on:** copy the API key from your Prospeo dashboard, then in `config.php`:
+```php
+'PROSPEO_BACKEND' => '',                // '' = on when the key is set; 'mock' = fake people (refused in production); 'off'
+'PROSPEO_API_KEY' => '…',               // never commit, zip or paste this key in chat
+'PROSPEO_DAILY_CREDIT_CAP' => '200',    // credits the whole app may spend per day (searches + reveals)
+```
+`/health.php` shows:
+- **Prospeo API reachable**
+- **Prospeo credits left** (WARN under 1,000)
+- **Prospeo credits used today**, against the cap
+
+**Credits and limits:**
+- The daily cap is checked **before** every paid call: a search page needs 1 credit, an email 1, a mobile 10.
+- The header shows the credits left in Prospeo (refreshed every 10 minutes) and today's use.
+- Prospeo's own rate limit applies too. On the Starter plan that's 1 search a second and 30 a minute; the app waits briefly or says "try again in a minute".
+
+**Privacy:**
+- Prospeo results go to your browser only. Names, titles, emails and phone numbers are **never written to disk or to the audit log**.
+- The app keeps only:
+  - the Prospeo person ids of a search, for 24 h
+  - today's credit count
+  - cached location names
+- The app can call only four Prospeo endpoints: search-suggestions, search-person, account-information and enrich-person.
+  - Enrich-person runs only from a confirmed **Reveal contact**.
+  - Every other endpoint is refused in code.
+
+**What the Atlas side reads and stores:**
+- **Reads only.** The app can send GET requests only to:
+  - `/lists` and `/lists/{id}/members`
+  - `/people/{id}`, and `/people/search` (exact LinkedIn URL lookup for "Already in Atlas")
+  - `/files` and `/files/{id}/download`
+  - `/users`
+
+  Anything else, including every create, update or delete, is refused in code before any request is made.
+- **Rate limits:** badges load in batches of 10. On HTTP 429 the app waits for Atlas's `retryAfterSec` (up to 10 s) and retries; for a longer wait it shows "Atlas: busy, try later".
+- **Stored on disk:**
+  - pool counts and list names in `storage/atlas-cache/`, for 6 hours
+  - the title index described above
+  - nothing else about candidates
+- **Audit log:** each Atlas call is logged as its method, endpoint pattern and status, with no ids and no names.
 
 ## What the app writes
 
@@ -206,8 +376,18 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 | `/health.php` shows a WARN for "… over HTTP" | The server couldn't reach itself (no response, timeout) or got an unexpected status. Open the URL shown in a browser: 403 or 404 means it's fine, while showing the file means it's reachable. |
 | `/health.php` shows a FAIL for "… over HTTP" | `.htaccess` isn't being applied. Make sure both hidden `.htaccess` files were uploaded, and ask 20i whether `AllowOverride` is enabled. Until then, use layout A. |
 | "Atlas refused the API key" | Check `ATLAS_API_KEY` in `config.php`, or create a new key in Atlas (Settings → Integrations → API Keys). |
-| "Atlas lists in the map" WARN: "not visible to this key" | The list is private to another user. Make it public in Atlas, or use that user's key. |
-| A card says "No matching list" | No family matches its Role Sub-Group or title. On the **Lists** page, add the sub-group code or a keyword to a family. |
+| "Atlas pools found" WARN: "not visible to this key" | The list is private to another user. Make it public in Atlas, or use that user's key. |
+| Badges say "title index not built yet" / "building…" | Set up the cron job (Candidate Desk → Title index) or click **Lists → Rebuild index** and keep the page open until it finishes. |
+| "Atlas title index age" WARN (older than 36 h) | The cron job isn't running. Check the command and path in My20i → Scheduled Tasks, and run it once by hand with `--status`. |
+| "JD matching needs it" / "INDEX_NOT_READY" | Build the title index first (see above). |
+| A JD's must-haves look wrong | Edit them before **Find candidates**. If a skill or title is often missed, add it to `storage/jd-dictionary.json` (see JD matching), then rebuild the index. |
+| "Deep match in Claude" shows a text box instead of copying | The browser blocked the clipboard (it needs https). Select the text and copy it yourself. |
+| "Today's Prospeo credit cap is reached" | The whole app has spent `PROSPEO_DAILY_CREDIT_CAP` credits today. It resets at midnight UTC; raise the cap in `config.php` if needed. |
+| "Prospeo refused the API key" / "no credits left" | Check `PROSPEO_API_KEY`, or top up the Prospeo account. `/health.php` shows the credits left. |
+| "Search for this person first" on Reveal | Reveals only work for people in your own search results; search again (a page you already paid for is free for 30 days). |
+| "This site blocks automated reading" / "Paste the job description" | LinkedIn, Indeed and Glassdoor (and pages that fail to load) can't be read by the app. Paste the JD text instead. |
+| "Anthropic refused the API key" | Only if you switched AI scoring on: check `ANTHROPIC_API_KEY` in `config.php`. |
+| A card says "No matching list" | No pool matches its Role Sub-Group or title. On the **Lists** page, add the sub-group code or a keyword to a pool. |
 | A family shows "New – please review" | Atlas has a new list the app hadn't seen. Check its keywords on the **Lists** page and click **Save & mark reviewed**. |
 | A list shows "missing in Atlas" | It was deleted or made private in Atlas. It counts as 0. Remove it from `storage/atlas-list-map.json` over SFTP if it's gone for good. |
 | "Refresh from Atlas" says wait | It can be used once a minute. New lists are also picked up automatically every hour. |

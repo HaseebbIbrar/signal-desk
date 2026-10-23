@@ -15,6 +15,8 @@ final class Config
         'GRAPH_DRIVE_ID', 'GRAPH_MASTER_ITEM_ID', 'GRAPH_DEV_ITEM_ID',
         'AUTH_USERS', 'STORAGE_DIR',
         'ATLAS_BACKEND', 'ATLAS_API_KEY', 'ATLAS_BASE_URL', 'ATLAS_PROFILE_URL',
+        'ANTHROPIC_BACKEND', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_MONTHLY_LIMIT_EUR', 'ANTHROPIC_USD_TO_EUR',
+        'PROSPEO_BACKEND', 'PROSPEO_API_KEY', 'PROSPEO_DAILY_CREDIT_CAP',
     ];
 
     /** @return array<string,string> validated settings */
@@ -50,6 +52,25 @@ final class Config
         }
         if ($c['ATLAS_BASE_URL'] !== '' && !preg_match('~^https://[a-z0-9.-]+(?::\d+)?/?$~i', $c['ATLAS_BASE_URL'])) {
             throw new ConfigError('ATLAS_BASE_URL must look like https://api.recruitwithatlas.com');
+        }
+        foreach (['ANTHROPIC_BACKEND', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_MONTHLY_LIMIT_EUR', 'ANTHROPIC_USD_TO_EUR'] as $k) $c[$k] = trim((string) ($c[$k] ?? ''));
+        $c['ANTHROPIC_BACKEND'] = strtolower($c['ANTHROPIC_BACKEND']);
+        if (!in_array($c['ANTHROPIC_BACKEND'], ['', 'anthropic', 'mock', 'off'], true)) throw new ConfigError('ANTHROPIC_BACKEND must be off, anthropic or mock.');
+        if ($c['ANTHROPIC_BACKEND'] === 'mock' && $c['APP_ENV'] === 'production') {
+            throw new ConfigError('ANTHROPIC_BACKEND=mock is not allowed when APP_ENV=production.');
+        }
+        if ($c['ANTHROPIC_MODEL'] !== '' && !preg_match('/^claude-[a-z0-9.-]+$/', $c['ANTHROPIC_MODEL'])) throw new ConfigError('ANTHROPIC_MODEL must look like claude-opus-5-5.');
+        foreach (['ANTHROPIC_MONTHLY_LIMIT_EUR', 'ANTHROPIC_USD_TO_EUR'] as $k) {
+            if ($c[$k] !== '' && (!is_numeric($c[$k]) || (float) $c[$k] < 0)) throw new ConfigError("$k must be a number (e.g. 50).");
+        }
+        foreach (['PROSPEO_BACKEND', 'PROSPEO_API_KEY', 'PROSPEO_DAILY_CREDIT_CAP'] as $k) $c[$k] = trim((string) ($c[$k] ?? ''));
+        $c['PROSPEO_BACKEND'] = strtolower($c['PROSPEO_BACKEND']);
+        if (!in_array($c['PROSPEO_BACKEND'], ['', 'prospeo', 'mock', 'off'], true)) throw new ConfigError('PROSPEO_BACKEND must be prospeo, mock or off.');
+        if ($c['PROSPEO_BACKEND'] === 'mock' && $c['APP_ENV'] === 'production') {
+            throw new ConfigError('PROSPEO_BACKEND=mock is not allowed when APP_ENV=production.');
+        }
+        if ($c['PROSPEO_DAILY_CREDIT_CAP'] !== '' && (!ctype_digit($c['PROSPEO_DAILY_CREDIT_CAP']) || (int) $c['PROSPEO_DAILY_CREDIT_CAP'] > 100000)) {
+            throw new ConfigError('PROSPEO_DAILY_CREDIT_CAP must be a whole number (e.g. 200).');
         }
         if ($c['APP_ENV'] === 'production' && $c['APP_ORIGIN'] === '') {
             throw new ConfigError('APP_ORIGIN must be set in production (e.g. https://signals.swooscale.com).');

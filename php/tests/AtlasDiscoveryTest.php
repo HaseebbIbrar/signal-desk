@@ -36,31 +36,29 @@ function t_saved_map(string $dir): array
 
 test('Atlas map: tightened keywords; Credit Risk Analyst, Financial Auditor, Simulation Engineer -> "No matching list"', function () {
     $map = ListMap::load(tmpdir(), T_DEFAULT_MAP)['map'];
-    foreach (['Credit Risk Analyst', 'Financial Auditor', 'Simulation Engineer', 'Compliance Officer (Banking)', 'Identity Theft Investigator'] as $t) {
+    foreach (['Credit Risk Analyst', 'Financial Auditor', 'Simulation Engineer', 'Compliance Officer (Banking)', 'Identity Theft Investigator', 'Customs Clearance Officer', 'Security Officer'] as $t) {
         eq([], ListMap::match($map, $t)['families'], "$t should not match");
     }
-    eq(['GRC, Risk & Compliance'], ListMap::match($map, 'IT Risk Manager (m/f/x)')['families']);
-    eq(['GRC, Risk & Compliance'], ListMap::match($map, 'Senior IT Auditor')['families']);
-    eq(['IAM Specialists'], ListMap::match($map, 'Identity and Access Management Engineer')['families']);
-    eq(['IAM Specialists'], ListMap::match($map, 'Identity Engineer')['families']);
-    eq(['Cyber Range & Simulation'], ListMap::match($map, 'Attack Simulation Specialist')['families']);
-    eq(['GRC, Risk & Compliance'], ListMap::match($map, 'Information Security Officer')['families'], 'only GRC now (removed from CISO)');
-    $ciso = ListMap::load(tmpdir(), T_DEFAULT_MAP)['map']['families']['CISO & Security Leadership']['keywords'];
-    ok(!in_array('security officer', $ciso, true));
+    foreach (['IT Risk Manager (m/f/x)', 'Senior IT Auditor', 'Identity and Access Management Engineer', 'Identity Engineer', 'Information Security Officer'] as $t) {
+        eq(['Cyber Security'], ListMap::match($map, $t)['families'], $t);
+    }
+    eq(['Defence & Public Sector'], ListMap::match($map, 'Attack Simulation Specialist')['families']);
+    ok(!in_array('security officer', $map['families']['Cyber Security']['keywords'], true));
 });
 
-test('Atlas discovery: a new list whose name matches a family is attached to it (by type)', function () {
+test('Atlas discovery: a new list whose name matches a pool is attached to it (other list types still work)', function () {
     [$src, $mock, $dir] = t_source();
-    $id = $mock->addList('Security Architects – Contract', 4);
+    $id = $mock->addList('Cyber Security – Freelance', 4);
+    $mock->addList('Candidates – Data & AI – Contract', 2);
     $changes = $src->discover(true);
-    eq(['new list "Security Architects – Contract" added to family "Security Architects"'], $changes);
-    $lists = t_saved_map($dir)['families']['Security Architects']['lists'];
-    eq(['permanent', 'freelance', 'contract'], array_column($lists, 'type'));
-    eq($id, $lists[2]['id']);
-    ok($lists[2]['auto']);
-    $c = $src->counts(['Security Architects']);
-    eq(3, count($c['lists']));
-    ok($c['n'] >= 4, 'contract members counted in N');
+    eq(['new list "Cyber Security – Freelance" added to family "Cyber Security"', 'new list "Candidates – Data & AI – Contract" added to family "Data & AI"'], $changes);
+    $lists = t_saved_map($dir)['families']['Cyber Security']['lists'];
+    eq(['pool', 'freelance'], array_column($lists, 'type'));
+    eq($id, $lists[1]['id']);
+    ok($lists[1]['auto']);
+    $c = $src->counts(['Cyber Security']);
+    eq(2, count($c['lists']));
+    eq(['pool', 'freelance'], array_keys($c['types']));
     $audit = array_values(array_filter($GLOBALS['__events'], fn ($e) => $e['type'] === 'atlas_map_auto'));
     eq(1, count($audit));
 });
@@ -86,27 +84,21 @@ test('Atlas discovery: a new list with an unknown family creates an auto family 
 
 test('Atlas discovery: a deleted list is marked missing and left out of the counts, without crashing', function () {
     [$src, $mock, $dir] = t_source();
-    $before = $src->counts(['IAM Specialists']);
-    $freelanceId = '';
-    foreach ($mock->lists as $id => $l) if ($l['name'] === 'IAM Specialists – Freelance') $freelanceId = $id;
-    unset($mock->lists[$freelanceId]); // deleted in Atlas
+    $poolId = '2d5784d0-872e-4bf4-8293-6dba34f179d1'; // Candidates – Data & AI
+    ok($src->counts(['Data & AI'])['n'] > 0);
+    $saved = $mock->lists[$poolId];
+    unset($mock->lists[$poolId]); // deleted in Atlas
     $changes = $src->discover(true);
-    eq(['list "IAM Specialists – Freelance" not found in Atlas: marked missing'], $changes);
-    $lists = t_saved_map($dir)['families']['IAM Specialists']['lists'];
-    eq('missing', $lists[1]['status']);
-    $after = $src->counts(['IAM Specialists']); // count cache from before is still valid (6 h): clear it like "Refresh" does
-    $GLOBALS['__dummy'] = $after;
+    eq(['list "Candidates – Data & AI" not found in Atlas: marked missing'], $changes);
+    eq('missing', t_saved_map($dir)['families']['Data & AI']['lists'][0]['status']);
     (new TtlFileCache("$dir/atlas-cache", Atlas::CACHE_TTL))->clear();
-    $fresh = $src->counts(['IAM Specialists']);
-    eq(0, $fresh['f'], 'freelance list dropped from the counts');
-    ok($fresh['n'] <= $before['n']);
-    eq([true, false], array_column($fresh['lists'], 'found'));
-    // the members endpoint 404s for a list deleted after the list cache was filled: still no crash
-    $r = $src->search('IAM Specialist', '', '', 1);
-    ok($r['counts']['n'] > 0);
-    // the list comes back: restored
-    $mock->lists[$freelanceId] = ['name' => 'IAM Specialists – Freelance', 'members' => []];
-    eq(['list "IAM Specialists – Freelance" is back in Atlas'], $src->discover(true));
+    $fresh = $src->counts(['Data & AI']);
+    eq(0, $fresh['n']);
+    eq([false], array_column($fresh['lists'], 'found'));
+    $r = $src->search('Data Engineer', '', '', 1);
+    eq([0, []], [$r['m'], $r['members']]);
+    $mock->lists[$poolId] = $saved; // the list comes back: restored
+    eq(['list "Candidates – Data & AI" is back in Atlas'], $src->discover(true));
 });
 
 test('Atlas discovery: at most once an hour (timestamp in storage); a failing Atlas never crashes it', function () {
@@ -141,14 +133,12 @@ test('Atlas discovery: at most once an hour (timestamp in storage); a failing At
 
 test('Atlas search matches list names directly (Candidates page), badges do not', function () {
     [$src] = t_source();
-    $r = $src->search('Academia', '', '', 1);
-    eq(['Research & Academia'], $r['families']);
+    $r = $src->search('Leadership', '', '', 1);
+    eq(['Leadership & Management'], $r['families']);
     eq('list name', $r['reason']);
-    ok($r['counts']['n'] > 0);
-    eq([], $src->match('Academia')['families'], 'badge matching stays on sub-group/keywords');
-    $both = $src->search('Founders', '', '', 1);
-    eq(['Other / Management & Founders'], $both['families']);
-    eq(['Microsoft – Data Engineers'], $src->search('Data Engineers', '', '', 1)['families'], 'plural list names match');
+    ok($r['m'] > 0);
+    eq([], $src->match('Leadership')['families'], 'badge matching stays on sub-group/keywords');
+    eq(['Data & AI'], $src->search('Data & AI', '', '', 1)['families']);
 });
 
 test('/lists edit: keywords and Role Sub-Groups saved to storage/atlas-list-map.json, reviewed, audited', function () {
@@ -173,12 +163,12 @@ test('"Refresh from Atlas": clears count and list caches, re-runs discovery, at 
     [$src, $mock, $dir, $cache] = t_source();
     $now = 2_000_000_000;
     $src->now = function () use (&$now) { return $now; };
-    $src->counts(['IAM Specialists']);
+    $src->counts(['Cyber Security']);
     ok(count(glob("$dir/atlas-cache/*.json")) >= 2);
-    $mock->addList('IAM Specialists – Contract', 2);
+    $mock->addList('Cyber Security – Contract', 2);
     $r = $src->refresh('jp');
     ok($r['cleared'] >= 2);
-    eq(['new list "IAM Specialists – Contract" added to family "IAM Specialists"'], $r['changes']);
+    eq(['new list "Cyber Security – Contract" added to family "Cyber Security"'], $r['changes']);
     $now += 30;
     $e = throws(fn () => $src->refresh('jp'), AppError::class, 'less than a minute ago');
     eq('REFRESH_TOO_SOON', $e->errCode);
@@ -201,7 +191,9 @@ test('List-name parsing and auto keywords', function () {
     eq(['Security Architects', 'permanent'], ListMap::parseListName('Security Architects – Permanent'));
     eq(['Microsoft – Data Engineers', 'freelance'], ListMap::parseListName('Microsoft – Data Engineers – Freelance'));
     eq(['SAP Consultants', 'contract'], ListMap::parseListName('SAP Consultants - Contract'));
-    eq(['To verify – Belgian eligibility', 'other'], ListMap::parseListName('To verify – Belgian eligibility'));
+    eq(['Cyber Security', 'pool'], ListMap::parseListName('Candidates – Cyber Security'));
+    eq(['Data & AI', 'freelance'], ListMap::parseListName('Candidates – Data & AI – Freelance'));
+    eq(['To verify – Belgian eligibility', 'pool'], ListMap::parseListName('To verify – Belgian eligibility'));
     eq('sap consultant', ListMap::autoKeyword('SAP Consultants'));
     eq('power platform developer', ListMap::autoKeyword('Microsoft – Power Platform Developers'));
     eq('security', ListMap::singular('security'));

@@ -46,19 +46,24 @@ test('Atlas: title normalisation strips gender markers, punctuation and (optiona
 test('Atlas: matching uses Role Sub-Group first, then title keywords, else "No matching list"', function () {
     $map = t_map();
     $m = ListMap::match($map, 'Some Unrelated Title', 'A2 - Pentest / Offensive Security', 'A - Security');
-    eq(['families' => ['Offensive Security & Pentest'], 'reason' => 'Role Sub-Group'], array_intersect_key($m, ['families' => 1, 'reason' => 1]));
+    eq(['families' => ['Cyber Security'], 'reason' => 'Role Sub-Group'], array_intersect_key($m, ['families' => 1, 'reason' => 1]));
     $m = ListMap::match($map, 'Senior Security Architect (m/f/x)', '', '');
     eq('title keywords', $m['reason']);
-    eq(['Microsoft – Security Architects', 'Security Architects'], $m['families']);
+    eq(['Cyber Security'], $m['families']);
+    eq(['Data & AI'], ListMap::match($map, 'x', 'B1 - Data Engineering')['families']);
+    eq(['Infrastructure & Cloud'], ListMap::match($map, 'Azure Cloud Architect')['families']);
+    eq(['Software & Architecture'], ListMap::match($map, 'Solution Architect')['families'], 'a keyword lives in one pool only');
+    eq(['Leadership & Management'], ListMap::match($map, 'Head of IT')['families']);
+    eq(['Defence & Public Sector'], ListMap::match($map, 'Cyber Range Engineer')['families']);
     $m = ListMap::match($map, 'CISO', 'Z9 - Something new', '');
-    eq(['CISO & Security Leadership'], $m['families'], 'unknown sub-group falls back to keywords');
+    eq(['Cyber Security'], $m['families'], 'unknown sub-group falls back to keywords');
     eq('none', ListMap::match($map, 'Bakery Manager', '', 'X - Food')['reason']);
     eq([], ListMap::match($map, 'Bakery Manager')['families']);
     // keywords are whole words: "soc" must not match "associate"
     eq([], ListMap::match($map, 'Associate Consultant')['families']);
     // Role Group is the last resort, only when the map lists it
-    $map['families']['GRC, Risk & Compliance']['roleGroups'] = ['A - Security'];
-    eq(['families' => ['GRC, Risk & Compliance'], 'reason' => 'Role Group'], array_intersect_key(ListMap::match($map, 'Bakery Manager', '', 'A - Security'), ['families' => 1, 'reason' => 1]));
+    $map['families']['Cyber Security']['roleGroups'] = ['A - Security'];
+    eq(['families' => ['Cyber Security'], 'reason' => 'Role Group'], array_intersect_key(ListMap::match($map, 'Bakery Manager', '', 'A - Security'), ['families' => 1, 'reason' => 1]));
 });
 
 test('Atlas: the list map is editable in storage without code changes; a broken file falls back to the default', function () {
@@ -67,15 +72,15 @@ test('Atlas: the list map is editable in storage without code changes; a broken 
     $l = ListMap::load($dir, $default);
     ok(is_file("$dir/atlas-list-map.json"), 'default copied to storage on first use');
     eq(null, $l['error']);
-    eq(23, count($l['map']['families']));
+    eq(6, count($l['map']['families']));
     $edited = $l['map'];
-    $edited['families']['Research & Academia']['keywords'][] = 'bakery';
+    $edited['families']['Defence & Public Sector']['keywords'][] = 'bakery';
     file_put_contents("$dir/atlas-list-map.json", json_encode($edited));
-    eq(['Research & Academia'], ListMap::match(ListMap::load($dir, $default)['map'], 'Bakery Manager')['families']);
+    eq(['Defence & Public Sector'], ListMap::match(ListMap::load($dir, $default)['map'], 'Bakery Manager')['families']);
     file_put_contents("$dir/atlas-list-map.json", '{ not json');
     $bad = ListMap::load($dir, $default);
     ok(str_contains((string) $bad['error'], 'not valid JSON'));
-    eq(23, count($bad['map']['families']));
+    eq(6, count($bad['map']['families']));
 });
 
 test('Atlas guard: GET-only allowlist; create/update/delete and off-list endpoints are refused before any request', function () {
@@ -85,7 +90,9 @@ test('Atlas guard: GET-only allowlist; create/update/delete and off-list endpoin
     eq('/api/v1/people/{id}', AtlasGuard::assert('GET', "/api/v1/people/$id"));
     eq('/api/v1/files/{id}/download', AtlasGuard::assert('GET', "/api/v1/files/$id/download"));
     foreach (['POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as $m) throws(fn () => AtlasGuard::assert($m, '/api/v1/lists'), ForbiddenWriteError::class, 'read-only');
-    foreach (['/api/v1/people', '/api/v1/people/search', '/api/v1/projects', "/api/v1/lists/$id/members/remove", '/api/v1/lists/../people', "/api/v1/people/$id/enrich", '/api/v1/lists?x=1'] as $p) {
+    eq('/api/v1/people/search', AtlasGuard::assert('GET', '/api/v1/people/search'), 'exact LinkedIn lookup ("Already in Atlas")');
+    throws(fn () => AtlasGuard::assert('POST', '/api/v1/people/search'), ForbiddenWriteError::class, 'read-only');
+    foreach (['/api/v1/people', '/api/v1/people/search/all', '/api/v1/projects', "/api/v1/lists/$id/members/remove", '/api/v1/lists/../people', "/api/v1/people/$id/enrich", '/api/v1/lists?x=1'] as $p) {
         throws(fn () => AtlasGuard::assert('GET', $p), ForbiddenWriteError::class, 'allowlist');
     }
     $calls = 0;
@@ -129,23 +136,21 @@ test('Atlas: audit log records method, endpoint pattern and status only (no ids,
     }
 });
 
-test('Atlas mock search: families -> deduplicated N (P / F), 25 per page, profile link, names fetched live', function () {
-    [$src, $mock] = t_atlas();
+test('Atlas mock search (no title index yet): the whole pool, 25 per page, profile link, names fetched live', function () {
+    [$src] = t_atlas();
     $r = $src->search('Senior Security Architect (m/f/x)', '', '', 1);
-    eq(['Microsoft – Security Architects', 'Security Architects'], $r['families']);
-    $c = $r['counts'];
-    ok($c['n'] > 0 && $c['n'] <= $c['p'] + $c['f'], 'N is deduplicated across lists');
-    ok($c['n'] < $c['p'] + $c['f'], 'someone on both a Permanent and a Freelance list is counted once in N');
-    eq(4, count($c['lists']), 'Permanent + Freelance for each of the 2 families');
-    ok(count(array_filter($c['lists'], fn ($l) => $l['found'])) === 4, 'all 4 lists found in Atlas');
-    ok(count($r['members']) <= AtlasListsSource::PAGE_SIZE);
+    eq(['Cyber Security'], $r['families']);
+    eq(['missing', null, 'pool'], [$r['index'], $r['n'], $r['showing']]);
+    ok($r['m'] > 25, 'pool size from the list');
+    eq([['family' => 'Cyber Security', 'type' => 'pool', 'name' => 'Candidates – Cyber Security', 'count' => $r['m'], 'found' => true]], $r['lists']);
+    ok(count($r['members']) === AtlasListsSource::PAGE_SIZE);
     $m0 = $r['members'][0];
     ok(str_starts_with($m0['name'], 'Example Person'));
     eq('https://my.recruitwithatlas.com/people-v2?profile=' . $m0['id'], $m0['profileUrl']);
     ok($m0['location'] !== '' && $m0['company'] !== '');
     $ids = [];
     for ($p = 1; $p <= $r['totalPages']; $p++) foreach ($src->search('Security Architect', '', '', $p)['members'] as $m) $ids[] = $m['id'];
-    eq($c['n'], count(array_unique($ids)), 'pages cover every member exactly once');
+    eq($r['m'], count(array_unique($ids)), 'pages cover every member exactly once');
     eq(count($ids), count(array_unique($ids)));
     eq([], $src->search('Bakery Manager', '', '', 1)['families']);
 });
@@ -182,20 +187,20 @@ test('Atlas: CV link only on request, https only; invalid ids refused', function
     throws(fn () => $src->cvUrl('../../etc'), \SignalDesk\ValidationError::class);
 });
 
-test('Atlas health: reachable + lists visible (mock); off when no key', function () {
+test('Atlas health: reachable + 6 pools found (mock); off when no key', function () {
     [$src] = t_atlas();
     $rows = $src->health();
     eq(['Atlas API reachable', 'OK'], array_slice($rows[0], 0, 2));
-    eq('OK', $rows[1][1]);
-    ok(str_contains($rows[1][2], '46 found'));
+    eq(['Atlas pools found', 'OK'], array_slice($rows[1], 0, 2));
+    ok(str_contains($rows[1][2], '6 found'));
     $cfg = ['ATLAS_BACKEND' => '', 'ATLAS_API_KEY' => '', 'STORAGE_DIR' => tmpdir()];
     eq('off', Atlas::mode($cfg));
     eq('WARN', Health::atlasChecks($cfg, __DIR__ . '/../private')[0][1]);
     eq('atlas', Atlas::mode(['ATLAS_API_KEY' => 'k']));
     $mockCfg = ['ATLAS_BACKEND' => 'mock', 'ATLAS_API_KEY' => '', 'STORAGE_DIR' => tmpdir()];
     $h = Health::atlasChecks($mockCfg, __DIR__ . '/../private');
-    eq(['Atlas (Candidate Desk)', 'Atlas list map', 'Atlas API reachable', 'Atlas lists in the map'], array_column($h, 0));
-    eq([], array_values(array_filter(array_column($h, 1), fn ($s) => $s !== 'OK')));
+    eq(['Atlas (Candidate Desk)', 'Atlas list map', 'Atlas API reachable', 'Atlas pools found', 'Atlas title index'], array_column($h, 0));
+    eq(['Atlas title index' => 'WARN'], array_filter(array_column($h, 1, 0), fn ($s) => $s !== 'OK'), 'only the (not yet built) index warns');
 });
 
 test('Config: ATLAS_BACKEND=mock is refused in production; bad values refused', function () {

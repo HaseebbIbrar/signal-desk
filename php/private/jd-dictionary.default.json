@@ -1,0 +1,2965 @@
+{
+  "_help": "Rule-based job-description parser. Edit storage/jd-dictionary.json (not this default). Skills are also the vocabulary of the title index: rebuild the index after changing them.",
+  "version": 1,
+  "titles": {
+    "Security Architect": {
+      "synonyms": [
+        "security architect",
+        "cybersecurity architect",
+        "cyber security architect",
+        "architecte sécurité",
+        "architecte cybersécurité",
+        "architecte en sécurité",
+        "beveiligingsarchitect",
+        "cyber architect"
+      ]
+    },
+    "Security Engineer": {
+      "synonyms": [
+        "security engineer",
+        "cybersecurity engineer",
+        "cyber security engineer",
+        "ingénieur sécurité",
+        "ingénieur cybersécurité",
+        "security ingenieur",
+        "beveiligingsingenieur"
+      ]
+    },
+    "Security Analyst": {
+      "synonyms": [
+        "security analyst",
+        "cybersecurity analyst",
+        "soc analyst",
+        "analyste sécurité",
+        "analyste soc",
+        "analyste cybersécurité"
+      ]
+    },
+    "Security Consultant": {
+      "synonyms": [
+        "security consultant",
+        "cybersecurity consultant",
+        "cyber security consultant",
+        "consultant cybersécurité",
+        "consultant sécurité"
+      ]
+    },
+    "Penetration Tester": {
+      "synonyms": [
+        "penetration tester",
+        "pentester",
+        "ethical hacker",
+        "red teamer",
+        "offensive security engineer",
+        "testeur d'intrusion"
+      ]
+    },
+    "IAM Engineer": {
+      "synonyms": [
+        "iam engineer",
+        "iam specialist",
+        "iam consultant",
+        "identity and access management engineer",
+        "identity engineer",
+        "identity architect",
+        "iam architect",
+        "pam engineer"
+      ]
+    },
+    "GRC Consultant": {
+      "synonyms": [
+        "grc consultant",
+        "grc specialist",
+        "grc analyst",
+        "risk and compliance",
+        "it risk manager",
+        "it auditor",
+        "information security officer",
+        "responsable sécurité de l'information",
+        "security compliance"
+      ]
+    },
+    "CISO": {
+      "synonyms": [
+        "ciso",
+        "chief information security officer",
+        "head of security",
+        "head of cybersecurity",
+        "head of information security",
+        "security manager",
+        "responsable de la sécurité",
+        "vciso"
+      ]
+    },
+    "SOC Manager": {
+      "synonyms": [
+        "soc manager",
+        "soc lead",
+        "head of soc"
+      ]
+    },
+    "Incident Responder": {
+      "synonyms": [
+        "incident responder",
+        "incident response analyst",
+        "dfir analyst",
+        "forensic analyst",
+        "threat hunter"
+      ]
+    },
+    "Detection Engineer": {
+      "synonyms": [
+        "detection engineer",
+        "siem engineer",
+        "soc engineer"
+      ]
+    },
+    "OT Security Engineer": {
+      "synonyms": [
+        "ot security engineer",
+        "ics security engineer",
+        "ot security specialist",
+        "ot security consultant"
+      ]
+    },
+    "AppSec Engineer": {
+      "synonyms": [
+        "application security engineer",
+        "appsec engineer",
+        "devsecops engineer",
+        "product security engineer"
+      ]
+    },
+    "Cloud Security Engineer": {
+      "synonyms": [
+        "cloud security engineer",
+        "cloud security architect"
+      ]
+    },
+    "Network Security Engineer": {
+      "synonyms": [
+        "network security engineer",
+        "firewall engineer",
+        "ingénieur sécurité réseau"
+      ]
+    },
+    "Cloud Engineer": {
+      "synonyms": [
+        "cloud engineer",
+        "azure engineer",
+        "aws engineer",
+        "cloud ingenieur",
+        "ingénieur cloud"
+      ]
+    },
+    "Cloud Architect": {
+      "synonyms": [
+        "cloud architect",
+        "azure architect",
+        "azure cloud architect",
+        "aws architect",
+        "architecte cloud"
+      ]
+    },
+    "DevOps Engineer": {
+      "synonyms": [
+        "devops engineer",
+        "devops",
+        "platform engineer",
+        "site reliability engineer",
+        "sre",
+        "ingénieur devops"
+      ]
+    },
+    "Infrastructure Architect": {
+      "synonyms": [
+        "infrastructure architect",
+        "infra architect",
+        "architecte infrastructure"
+      ]
+    },
+    "Network Engineer": {
+      "synonyms": [
+        "network engineer",
+        "network administrator",
+        "netwerkbeheerder",
+        "netwerkingenieur",
+        "ingénieur réseau",
+        "administrateur réseau",
+        "network specialist"
+      ]
+    },
+    "Systems Engineer": {
+      "synonyms": [
+        "systems engineer",
+        "system engineer",
+        "systeemingenieur",
+        "ingénieur système",
+        "ingénieur systèmes",
+        "infrastructure engineer"
+      ]
+    },
+    "Systems Administrator": {
+      "synonyms": [
+        "systems administrator",
+        "system administrator",
+        "sysadmin",
+        "systeembeheerder",
+        "administrateur système",
+        "administrateur systèmes"
+      ]
+    },
+    "Modern Workplace Engineer": {
+      "synonyms": [
+        "modern workplace engineer",
+        "m365 engineer",
+        "workplace engineer",
+        "intune engineer"
+      ]
+    },
+    "Software Engineer": {
+      "synonyms": [
+        "software engineer",
+        "software developer",
+        "developer",
+        "ontwikkelaar",
+        "softwareontwikkelaar",
+        "développeur",
+        "ingénieur logiciel",
+        "programmeur"
+      ]
+    },
+    "Full Stack Developer": {
+      "synonyms": [
+        "full stack developer",
+        "full-stack developer",
+        "fullstack developer",
+        "développeur full stack"
+      ]
+    },
+    "Backend Developer": {
+      "synonyms": [
+        "backend developer",
+        "back-end developer",
+        "développeur backend"
+      ]
+    },
+    "Frontend Developer": {
+      "synonyms": [
+        "frontend developer",
+        "front-end developer",
+        "développeur frontend"
+      ]
+    },
+    ".NET Developer": {
+      "synonyms": [
+        ".net developer",
+        "c# developer",
+        "dotnet developer",
+        "développeur .net",
+        ".net ontwikkelaar"
+      ]
+    },
+    "Java Developer": {
+      "synonyms": [
+        "java developer",
+        "java ontwikkelaar",
+        "développeur java"
+      ]
+    },
+    "Python Developer": {
+      "synonyms": [
+        "python developer",
+        "python ontwikkelaar",
+        "développeur python"
+      ]
+    },
+    "Software Architect": {
+      "synonyms": [
+        "software architect",
+        "architecte logiciel",
+        "technical architect",
+        "application architect"
+      ]
+    },
+    "Solution Architect": {
+      "synonyms": [
+        "solution architect",
+        "solutions architect",
+        "architecte solution",
+        "architecte de solutions",
+        "oplossingsarchitect"
+      ]
+    },
+    "Enterprise Architect": {
+      "synonyms": [
+        "enterprise architect",
+        "architecte d'entreprise",
+        "domain architect"
+      ]
+    },
+    "Test Engineer": {
+      "synonyms": [
+        "test engineer",
+        "qa engineer",
+        "test automation engineer",
+        "tester",
+        "testeur"
+      ]
+    },
+    "Data Engineer": {
+      "synonyms": [
+        "data engineer",
+        "data ingenieur",
+        "ingénieur data",
+        "ingénieur de données",
+        "big data engineer",
+        "analytics engineer"
+      ]
+    },
+    "Data Architect": {
+      "synonyms": [
+        "data architect",
+        "architecte data",
+        "architecte de données"
+      ]
+    },
+    "Data Scientist": {
+      "synonyms": [
+        "data scientist",
+        "scientifique des données"
+      ]
+    },
+    "Data Analyst": {
+      "synonyms": [
+        "data analyst",
+        "bi analyst",
+        "bi developer",
+        "business intelligence developer",
+        "analyste de données",
+        "power bi developer"
+      ]
+    },
+    "ML Engineer": {
+      "synonyms": [
+        "ml engineer",
+        "machine learning engineer",
+        "ai engineer",
+        "mlops engineer",
+        "genai engineer",
+        "llm engineer"
+      ]
+    },
+    "Database Administrator": {
+      "synonyms": [
+        "database administrator",
+        "dba",
+        "administrateur de base de données"
+      ]
+    },
+    "CTO": {
+      "synonyms": [
+        "cto",
+        "chief technology officer",
+        "directeur technique"
+      ]
+    },
+    "CIO": {
+      "synonyms": [
+        "cio",
+        "chief information officer",
+        "it director",
+        "directeur informatique",
+        "directeur it"
+      ]
+    },
+    "IT Manager": {
+      "synonyms": [
+        "it manager",
+        "head of it",
+        "it-manager",
+        "responsable informatique",
+        "responsable it",
+        "ict manager",
+        "diensthoofd ict"
+      ]
+    },
+    "Engineering Manager": {
+      "synonyms": [
+        "engineering manager",
+        "head of engineering",
+        "vp engineering",
+        "development manager"
+      ]
+    },
+    "Project Manager": {
+      "synonyms": [
+        "project manager",
+        "projectmanager",
+        "chef de projet",
+        "program manager",
+        "programme manager"
+      ]
+    },
+    "Business Analyst": {
+      "synonyms": [
+        "business analyst",
+        "functional analyst",
+        "functioneel analist",
+        "analyste fonctionnel",
+        "analyste business"
+      ]
+    },
+    "Product Owner": {
+      "synonyms": [
+        "product owner",
+        "product manager"
+      ]
+    },
+    "Scrum Master": {
+      "synonyms": [
+        "scrum master",
+        "agile coach"
+      ]
+    },
+    "Cyber Range Engineer": {
+      "synonyms": [
+        "cyber range engineer",
+        "cyber exercise",
+        "cyber range specialist"
+      ]
+    },
+    "Defence Analyst": {
+      "synonyms": [
+        "defence analyst",
+        "defense analyst",
+        "military analyst"
+      ]
+    },
+    "Researcher": {
+      "synonyms": [
+        "researcher",
+        "research engineer",
+        "research scientist",
+        "chercheur",
+        "onderzoeker"
+      ]
+    },
+    "SAP Consultant": {
+      "synonyms": [
+        "sap consultant",
+        "consultant sap",
+        "sap specialist"
+      ]
+    },
+    "Service Desk Engineer": {
+      "synonyms": [
+        "service desk engineer",
+        "helpdesk",
+        "help desk",
+        "servicedesk medewerker",
+        "support engineer"
+      ]
+    }
+  },
+  "skills": {
+    "azure": {
+      "aliases": [
+        "microsoft azure"
+      ],
+      "category": "cloud"
+    },
+    "aws": {
+      "aliases": [
+        "amazon web services"
+      ],
+      "category": "cloud"
+    },
+    "gcp": {
+      "aliases": [
+        "google cloud",
+        "google cloud platform"
+      ],
+      "category": "cloud"
+    },
+    "kubernetes": {
+      "aliases": [
+        "k8s",
+        "aks",
+        "eks",
+        "gke",
+        "openshift"
+      ],
+      "category": "cloud"
+    },
+    "docker": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "terraform": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "ansible": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "linux": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "windows server": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "vmware": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "citrix": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "nutanix": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "m365": {
+      "aliases": [
+        "microsoft 365",
+        "office 365",
+        "o365"
+      ],
+      "category": "infra"
+    },
+    "intune": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "sccm": {
+      "aliases": [
+        "mecm"
+      ],
+      "category": "infra"
+    },
+    "entra id": {
+      "aliases": [
+        "azure ad",
+        "azure active directory",
+        "microsoft entra"
+      ],
+      "category": "infra"
+    },
+    "active directory": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "powershell": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "python": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "java": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "c#": {
+      "aliases": [],
+      "category": "dev"
+    },
+    ".net": {
+      "aliases": [
+        "dotnet",
+        "asp.net",
+        ".net core"
+      ],
+      "category": "dev"
+    },
+    "javascript": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "typescript": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "react": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "angular": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "node.js": {
+      "aliases": [
+        "nodejs"
+      ],
+      "category": "dev"
+    },
+    "go": {
+      "aliases": [
+        "golang"
+      ],
+      "category": "dev"
+    },
+    "rust": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "c++": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "kotlin": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "php": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "sql": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "postgresql": {
+      "aliases": [
+        "postgres"
+      ],
+      "category": "dev"
+    },
+    "oracle": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "sap": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "salesforce": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "servicenow": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "databricks": {
+      "aliases": [],
+      "category": "data"
+    },
+    "snowflake": {
+      "aliases": [],
+      "category": "data"
+    },
+    "microsoft fabric": {
+      "aliases": [],
+      "category": "data"
+    },
+    "synapse": {
+      "aliases": [],
+      "category": "data"
+    },
+    "power bi": {
+      "aliases": [],
+      "category": "data"
+    },
+    "tableau": {
+      "aliases": [],
+      "category": "data"
+    },
+    "spark": {
+      "aliases": [
+        "pyspark"
+      ],
+      "category": "data"
+    },
+    "kafka": {
+      "aliases": [],
+      "category": "data"
+    },
+    "airflow": {
+      "aliases": [],
+      "category": "data"
+    },
+    "dbt": {
+      "aliases": [],
+      "category": "data"
+    },
+    "machine learning": {
+      "aliases": [
+        "ml",
+        "apprentissage automatique"
+      ],
+      "category": "data"
+    },
+    "llm": {
+      "aliases": [
+        "large language models",
+        "large language model"
+      ],
+      "category": "data"
+    },
+    "genai": {
+      "aliases": [
+        "generative ai",
+        "gen ai"
+      ],
+      "category": "data"
+    },
+    "pytorch": {
+      "aliases": [],
+      "category": "data"
+    },
+    "tensorflow": {
+      "aliases": [],
+      "category": "data"
+    },
+    "mlops": {
+      "aliases": [],
+      "category": "data"
+    },
+    "data governance": {
+      "aliases": [
+        "gouvernance des données"
+      ],
+      "category": "data"
+    },
+    "splunk": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sentinel": {
+      "aliases": [
+        "microsoft sentinel"
+      ],
+      "category": "security"
+    },
+    "defender": {
+      "aliases": [
+        "microsoft defender",
+        "defender for endpoint"
+      ],
+      "category": "security"
+    },
+    "crowdstrike": {
+      "aliases": [],
+      "category": "security"
+    },
+    "palo alto": {
+      "aliases": [
+        "palo alto networks"
+      ],
+      "category": "security"
+    },
+    "fortinet": {
+      "aliases": [
+        "fortigate"
+      ],
+      "category": "security"
+    },
+    "check point": {
+      "aliases": [
+        "checkpoint"
+      ],
+      "category": "security"
+    },
+    "cisco": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "juniper": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "f5": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "zscaler": {
+      "aliases": [],
+      "category": "security"
+    },
+    "okta": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sailpoint": {
+      "aliases": [],
+      "category": "security"
+    },
+    "cyberark": {
+      "aliases": [],
+      "category": "security"
+    },
+    "iam": {
+      "aliases": [
+        "identity and access management",
+        "identity & access management"
+      ],
+      "category": "security"
+    },
+    "pam": {
+      "aliases": [
+        "privileged access management"
+      ],
+      "category": "security"
+    },
+    "pki": {
+      "aliases": [],
+      "category": "security"
+    },
+    "siem": {
+      "aliases": [],
+      "category": "security"
+    },
+    "soar": {
+      "aliases": [],
+      "category": "security"
+    },
+    "edr": {
+      "aliases": [],
+      "category": "security"
+    },
+    "xdr": {
+      "aliases": [],
+      "category": "security"
+    },
+    "soc": {
+      "aliases": [],
+      "category": "security"
+    },
+    "penetration testing": {
+      "aliases": [
+        "pentest",
+        "pentesting",
+        "pen testing",
+        "tests d'intrusion"
+      ],
+      "category": "security"
+    },
+    "red team": {
+      "aliases": [
+        "red teaming"
+      ],
+      "category": "security"
+    },
+    "threat intelligence": {
+      "aliases": [],
+      "category": "security"
+    },
+    "threat hunting": {
+      "aliases": [],
+      "category": "security"
+    },
+    "incident response": {
+      "aliases": [
+        "incident handling",
+        "réponse aux incidents"
+      ],
+      "category": "security"
+    },
+    "forensics": {
+      "aliases": [
+        "dfir",
+        "digital forensics"
+      ],
+      "category": "security"
+    },
+    "vulnerability management": {
+      "aliases": [
+        "kwetsbaarheidsbeheer"
+      ],
+      "category": "security"
+    },
+    "appsec": {
+      "aliases": [
+        "application security"
+      ],
+      "category": "security"
+    },
+    "devsecops": {
+      "aliases": [],
+      "category": "security"
+    },
+    "devops": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "ci/cd": {
+      "aliases": [
+        "cicd",
+        "continuous integration"
+      ],
+      "category": "dev"
+    },
+    "zero trust": {
+      "aliases": [],
+      "category": "security"
+    },
+    "firewall": {
+      "aliases": [
+        "firewalls",
+        "pare-feu"
+      ],
+      "category": "security"
+    },
+    "network security": {
+      "aliases": [],
+      "category": "security"
+    },
+    "cloud security": {
+      "aliases": [],
+      "category": "security"
+    },
+    "ot security": {
+      "aliases": [
+        "ics security",
+        "scada",
+        "ot/ics"
+      ],
+      "category": "security"
+    },
+    "iec 62443": {
+      "aliases": [
+        "iec62443"
+      ],
+      "category": "security"
+    },
+    "iso 27001": {
+      "aliases": [
+        "iso27001",
+        "iso/iec 27001"
+      ],
+      "category": "security"
+    },
+    "nis2": {
+      "aliases": [
+        "nis 2",
+        "nis-2"
+      ],
+      "category": "security"
+    },
+    "dora": {
+      "aliases": [],
+      "category": "security"
+    },
+    "gdpr": {
+      "aliases": [
+        "rgpd"
+      ],
+      "category": "security"
+    },
+    "nist": {
+      "aliases": [],
+      "category": "security"
+    },
+    "risk management": {
+      "aliases": [
+        "risicobeheer",
+        "gestion des risques"
+      ],
+      "category": "security"
+    },
+    "audit": {
+      "aliases": [],
+      "category": "security"
+    },
+    "cissp": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "cism": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "cisa": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "crisc": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "oscp": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "ceh": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "ccsp": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "ccna": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "ccnp": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "ccie": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "itil": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "togaf": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "prince2": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "pmp": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "scrum": {
+      "aliases": [],
+      "category": "method"
+    },
+    "scaled agile": {
+      "aliases": [
+        "scaled agile framework"
+      ],
+      "category": "method"
+    },
+    "agile": {
+      "aliases": [],
+      "category": "method"
+    },
+    "mainframe": {
+      "aliases": [],
+      "category": "method"
+    },
+    "cobol": {
+      "aliases": [],
+      "category": "method"
+    },
+    "nato": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "security clearance": {
+      "aliases": [
+        "veiligheidsmachtiging",
+        "habilitation de sécurité",
+        "habilitation de securite"
+      ],
+      "category": "defence"
+    },
+    "qradar": {
+      "aliases": [],
+      "category": "security"
+    },
+    "elastic": {
+      "aliases": [],
+      "category": "security"
+    },
+    "elk": {
+      "aliases": [
+        "elastic stack"
+      ],
+      "category": "security"
+    },
+    "wazuh": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sumo logic": {
+      "aliases": [],
+      "category": "security"
+    },
+    "rapid7": {
+      "aliases": [],
+      "category": "security"
+    },
+    "tenable": {
+      "aliases": [],
+      "category": "security"
+    },
+    "nessus": {
+      "aliases": [],
+      "category": "security"
+    },
+    "qualys": {
+      "aliases": [],
+      "category": "security"
+    },
+    "burp suite": {
+      "aliases": [],
+      "category": "security"
+    },
+    "metasploit": {
+      "aliases": [],
+      "category": "security"
+    },
+    "kali linux": {
+      "aliases": [],
+      "category": "security"
+    },
+    "nmap": {
+      "aliases": [],
+      "category": "security"
+    },
+    "wireshark": {
+      "aliases": [],
+      "category": "security"
+    },
+    "owasp": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sast": {
+      "aliases": [],
+      "category": "security"
+    },
+    "dast": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sonarqube": {
+      "aliases": [],
+      "category": "security"
+    },
+    "snyk": {
+      "aliases": [],
+      "category": "security"
+    },
+    "veracode": {
+      "aliases": [],
+      "category": "security"
+    },
+    "checkmarx": {
+      "aliases": [],
+      "category": "security"
+    },
+    "hashicorp vault": {
+      "aliases": [],
+      "category": "security"
+    },
+    "mfa": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sso": {
+      "aliases": [
+        "single sign-on"
+      ],
+      "category": "security"
+    },
+    "saml": {
+      "aliases": [],
+      "category": "security"
+    },
+    "oauth": {
+      "aliases": [
+        "oauth2"
+      ],
+      "category": "security"
+    },
+    "openid connect": {
+      "aliases": [
+        "oidc"
+      ],
+      "category": "security"
+    },
+    "ping identity": {
+      "aliases": [],
+      "category": "security"
+    },
+    "forgerock": {
+      "aliases": [],
+      "category": "security"
+    },
+    "one identity": {
+      "aliases": [],
+      "category": "security"
+    },
+    "beyondtrust": {
+      "aliases": [],
+      "category": "security"
+    },
+    "thycotic": {
+      "aliases": [],
+      "category": "security"
+    },
+    "delinea": {
+      "aliases": [],
+      "category": "security"
+    },
+    "netwrix": {
+      "aliases": [],
+      "category": "security"
+    },
+    "varonis": {
+      "aliases": [],
+      "category": "security"
+    },
+    "proofpoint": {
+      "aliases": [],
+      "category": "security"
+    },
+    "mimecast": {
+      "aliases": [],
+      "category": "security"
+    },
+    "trend micro": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sophos": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sentinelone": {
+      "aliases": [],
+      "category": "security"
+    },
+    "carbon black": {
+      "aliases": [],
+      "category": "security"
+    },
+    "darktrace": {
+      "aliases": [],
+      "category": "security"
+    },
+    "vectra": {
+      "aliases": [],
+      "category": "security"
+    },
+    "nozomi": {
+      "aliases": [],
+      "category": "security"
+    },
+    "claroty": {
+      "aliases": [],
+      "category": "security"
+    },
+    "dragos": {
+      "aliases": [],
+      "category": "security"
+    },
+    "mitre att&ck": {
+      "aliases": [],
+      "category": "security"
+    },
+    "cyber range": {
+      "aliases": [],
+      "category": "security"
+    },
+    "threat modeling": {
+      "aliases": [],
+      "category": "security"
+    },
+    "security architecture": {
+      "aliases": [],
+      "category": "security"
+    },
+    "security operations": {
+      "aliases": [
+        "secops"
+      ],
+      "category": "security"
+    },
+    "data loss prevention": {
+      "aliases": [
+        "dlp"
+      ],
+      "category": "security"
+    },
+    "casb": {
+      "aliases": [],
+      "category": "security"
+    },
+    "sase": {
+      "aliases": [],
+      "category": "security"
+    },
+    "ztna": {
+      "aliases": [],
+      "category": "security"
+    },
+    "waf": {
+      "aliases": [
+        "web application firewall"
+      ],
+      "category": "security"
+    },
+    "ddos": {
+      "aliases": [],
+      "category": "security"
+    },
+    "ids": {
+      "aliases": [],
+      "category": "security"
+    },
+    "ips": {
+      "aliases": [],
+      "category": "security"
+    },
+    "nac": {
+      "aliases": [],
+      "category": "security"
+    },
+    "ise": {
+      "aliases": [
+        "cisco ise"
+      ],
+      "category": "security"
+    },
+    "hsm": {
+      "aliases": [],
+      "category": "security"
+    },
+    "encryption": {
+      "aliases": [],
+      "category": "security"
+    },
+    "cryptography": {
+      "aliases": [],
+      "category": "security"
+    },
+    "iso 27002": {
+      "aliases": [],
+      "category": "security"
+    },
+    "iso 22301": {
+      "aliases": [],
+      "category": "security"
+    },
+    "soc 2": {
+      "aliases": [],
+      "category": "security"
+    },
+    "pci dss": {
+      "aliases": [],
+      "category": "security"
+    },
+    "hipaa": {
+      "aliases": [],
+      "category": "security"
+    },
+    "cis controls": {
+      "aliases": [],
+      "category": "security"
+    },
+    "cobit": {
+      "aliases": [],
+      "category": "security"
+    },
+    "business continuity": {
+      "aliases": [
+        "bcp"
+      ],
+      "category": "security"
+    },
+    "disaster recovery": {
+      "aliases": [
+        "drp"
+      ],
+      "category": "security"
+    },
+    "privacy": {
+      "aliases": [
+        "data protection"
+      ],
+      "category": "security"
+    },
+    "dpo": {
+      "aliases": [],
+      "category": "security"
+    },
+    "cyber resilience act": {
+      "aliases": [],
+      "category": "security"
+    },
+    "ai act": {
+      "aliases": [],
+      "category": "security"
+    },
+    "azure devops": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "azure functions": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "azure data factory": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "azure sql": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "cosmos db": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "aws lambda": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "ec2": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "s3": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "cloudformation": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "bicep": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "pulumi": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "helm": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "argocd": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "istio": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "serverless": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "landing zone": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "finops": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "multi-cloud": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "hybrid cloud": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "iaas": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "paas": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "saas": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "cloud migration": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "oci": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "ibm cloud": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "alibaba cloud": {
+      "aliases": [],
+      "category": "cloud"
+    },
+    "data engineering": {
+      "aliases": [],
+      "category": "data"
+    },
+    "data warehouse": {
+      "aliases": [],
+      "category": "data"
+    },
+    "data lake": {
+      "aliases": [],
+      "category": "data"
+    },
+    "lakehouse": {
+      "aliases": [],
+      "category": "data"
+    },
+    "etl": {
+      "aliases": [],
+      "category": "data"
+    },
+    "elt": {
+      "aliases": [],
+      "category": "data"
+    },
+    "data modeling": {
+      "aliases": [],
+      "category": "data"
+    },
+    "data vault": {
+      "aliases": [],
+      "category": "data"
+    },
+    "kimball": {
+      "aliases": [],
+      "category": "data"
+    },
+    "mdm": {
+      "aliases": [],
+      "category": "data"
+    },
+    "collibra": {
+      "aliases": [],
+      "category": "data"
+    },
+    "informatica": {
+      "aliases": [],
+      "category": "data"
+    },
+    "talend": {
+      "aliases": [],
+      "category": "data"
+    },
+    "ssis": {
+      "aliases": [],
+      "category": "data"
+    },
+    "ssas": {
+      "aliases": [],
+      "category": "data"
+    },
+    "ssrs": {
+      "aliases": [],
+      "category": "data"
+    },
+    "qlik": {
+      "aliases": [],
+      "category": "data"
+    },
+    "looker": {
+      "aliases": [],
+      "category": "data"
+    },
+    "sas": {
+      "aliases": [],
+      "category": "data"
+    },
+    "scala": {
+      "aliases": [],
+      "category": "data"
+    },
+    "hadoop": {
+      "aliases": [],
+      "category": "data"
+    },
+    "hive": {
+      "aliases": [],
+      "category": "data"
+    },
+    "bigquery": {
+      "aliases": [],
+      "category": "data"
+    },
+    "redshift": {
+      "aliases": [],
+      "category": "data"
+    },
+    "mongodb": {
+      "aliases": [],
+      "category": "data"
+    },
+    "cassandra": {
+      "aliases": [],
+      "category": "data"
+    },
+    "neo4j": {
+      "aliases": [],
+      "category": "data"
+    },
+    "elasticsearch": {
+      "aliases": [],
+      "category": "data"
+    },
+    "redis": {
+      "aliases": [],
+      "category": "data"
+    },
+    "mysql": {
+      "aliases": [],
+      "category": "data"
+    },
+    "sql server": {
+      "aliases": [],
+      "category": "data"
+    },
+    "db2": {
+      "aliases": [],
+      "category": "data"
+    },
+    "teradata": {
+      "aliases": [],
+      "category": "data"
+    },
+    "nlp": {
+      "aliases": [],
+      "category": "data"
+    },
+    "computer vision": {
+      "aliases": [],
+      "category": "data"
+    },
+    "deep learning": {
+      "aliases": [],
+      "category": "data"
+    },
+    "langchain": {
+      "aliases": [],
+      "category": "data"
+    },
+    "rag": {
+      "aliases": [],
+      "category": "data"
+    },
+    "vector database": {
+      "aliases": [],
+      "category": "data"
+    },
+    "hugging face": {
+      "aliases": [],
+      "category": "data"
+    },
+    "scikit-learn": {
+      "aliases": [],
+      "category": "data"
+    },
+    "pandas": {
+      "aliases": [],
+      "category": "data"
+    },
+    "numpy": {
+      "aliases": [],
+      "category": "data"
+    },
+    "mlflow": {
+      "aliases": [],
+      "category": "data"
+    },
+    "kubeflow": {
+      "aliases": [],
+      "category": "data"
+    },
+    "azure machine learning": {
+      "aliases": [],
+      "category": "data"
+    },
+    "sagemaker": {
+      "aliases": [],
+      "category": "data"
+    },
+    "vertex ai": {
+      "aliases": [],
+      "category": "data"
+    },
+    "openai": {
+      "aliases": [],
+      "category": "data"
+    },
+    "copilot": {
+      "aliases": [],
+      "category": "data"
+    },
+    "data science": {
+      "aliases": [],
+      "category": "data"
+    },
+    "statistics": {
+      "aliases": [],
+      "category": "data"
+    },
+    "data quality": {
+      "aliases": [],
+      "category": "data"
+    },
+    "data catalog": {
+      "aliases": [],
+      "category": "data"
+    },
+    "networking": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "lan": {
+      "aliases": [
+        "lan/wan"
+      ],
+      "category": "infra"
+    },
+    "wan": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "sd-wan": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "bgp": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "ospf": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "mpls": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "vpn": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "tcp/ip": {
+      "aliases": [
+        "tcp ip"
+      ],
+      "category": "infra"
+    },
+    "dns": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "dhcp": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "load balancing": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "wifi": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "aruba": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "meraki": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "arista": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "extreme networks": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "hpe": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "dell": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "netapp": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "pure storage": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "storage": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "san": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "nas": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "backup": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "veeam": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "commvault": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "rubrik": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "hyper-v": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "proxmox": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "red hat": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "rhel": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "ubuntu": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "unix": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "aix": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "solaris": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "exchange": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "sharepoint": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "microsoft teams": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "citrix virtual apps": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "vdi": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "avd": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "windows 11": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "gpo": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "monitoring": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "zabbix": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "nagios": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "prometheus": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "grafana": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "datadog": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "dynatrace": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "new relic": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "datacenter": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "telecom": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "voip": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "5g": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "itsm": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "jira service management": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "topdesk": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "cmdb": {
+      "aliases": [],
+      "category": "infra"
+    },
+    "swift": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "ruby": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "perl": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "bash": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "vue": {
+      "aliases": [
+        "vue.js"
+      ],
+      "category": "dev"
+    },
+    "next.js": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "svelte": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "html": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "css": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "spring": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "spring boot": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "django": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "flask": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "fastapi": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "laravel": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "symfony": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "graphql": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "rest api": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "microservices": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "event-driven": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "grpc": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "rabbitmq": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "git": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "github": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "gitlab": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "jenkins": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "github actions": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "maven": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "gradle": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "junit": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "selenium": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "cypress": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "playwright": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "test automation": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "tdd": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "bdd": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "ddd": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "clean architecture": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "mobile": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "android": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "ios": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "flutter": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "react native": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "blazor": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "entity framework": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "unity": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "embedded": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "firmware": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "iot": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "rtos": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "outsystems": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "mendix": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "power platform": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "power apps": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "power automate": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "dynamics 365": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "sap s/4hana": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "sap btp": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "abap": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "odoo": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "workday": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "anaplan": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "netsuite": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "archimate": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "enterprise architecture": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "solution architecture": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "api management": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "mulesoft": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "boomi": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "tibco": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "biztalk": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "kafka connect": {
+      "aliases": [],
+      "category": "dev"
+    },
+    "nato secret": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "eu secret": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "cosmic top secret": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "military": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "defence": {
+      "aliases": [
+        "defense",
+        "defensie",
+        "défense"
+      ],
+      "category": "defence"
+    },
+    "c4isr": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "sigint": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "electronic warfare": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "tempest": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "link 16": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "mil-std": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "stanag": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "cyber command": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "cyber defence": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "critical infrastructure": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "public sector": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "government": {
+      "aliases": [],
+      "category": "defence"
+    },
+    "oscp+": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "osce": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "oswe": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "gpen": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "gcih": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "gcia": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "gsec": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "giac": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "security+": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "comptia": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "ccsk": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "cdpse": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "cipp/e": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "cipm": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "iso 27001 lead auditor": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "iso 27001 lead implementer": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "az-104": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "az-305": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "az-500": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "sc-100": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "sc-200": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "aws solutions architect": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "aws security specialty": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "ckad": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "cka": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "jncia": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "pcnse": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "nse4": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "vcp": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "mcse": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "rhce": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "ipma": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "psm": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "csm": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "safe agilist": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "lean six sigma": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "msp": {
+      "aliases": [],
+      "category": "certification"
+    },
+    "kanban": {
+      "aliases": [],
+      "category": "method"
+    },
+    "devops culture": {
+      "aliases": [],
+      "category": "method"
+    },
+    "itil 4": {
+      "aliases": [],
+      "category": "method"
+    },
+    "project management": {
+      "aliases": [],
+      "category": "method"
+    },
+    "product management": {
+      "aliases": [],
+      "category": "method"
+    },
+    "stakeholder management": {
+      "aliases": [],
+      "category": "method"
+    },
+    "change management": {
+      "aliases": [],
+      "category": "method"
+    },
+    "requirements analysis": {
+      "aliases": [],
+      "category": "method"
+    },
+    "business analysis": {
+      "aliases": [],
+      "category": "method"
+    },
+    "uml": {
+      "aliases": [],
+      "category": "method"
+    },
+    "bpmn": {
+      "aliases": [],
+      "category": "method"
+    },
+    "waterfall": {
+      "aliases": [],
+      "category": "method"
+    }
+  },
+  "seniority": {
+    "junior": [
+      "junior",
+      "jr",
+      "starter",
+      "entry-level",
+      "entry level",
+      "graduate",
+      "débutant",
+      "beginnend",
+      "trainee"
+    ],
+    "medior": [
+      "medior",
+      "mid-level",
+      "mid level",
+      "intermediate",
+      "confirmé",
+      "ervaren"
+    ],
+    "senior": [
+      "senior",
+      "sr",
+      "expert",
+      "expérimenté",
+      "experimented"
+    ],
+    "lead": [
+      "lead",
+      "principal",
+      "staff",
+      "team lead",
+      "teamlead",
+      "tech lead",
+      "teamleider",
+      "chef d'équipe"
+    ],
+    "head": [
+      "head of",
+      "manager",
+      "director",
+      "directeur",
+      "diensthoofd",
+      "responsable",
+      "hoofd"
+    ],
+    "c-level": [
+      "ciso",
+      "cto",
+      "cio",
+      "chief",
+      "vp",
+      "vice president"
+    ]
+  },
+  "languages": {
+    "Dutch": [
+      "dutch",
+      "nederlands",
+      "néerlandais",
+      "neerlandais",
+      "flemish",
+      "vlaams"
+    ],
+    "French": [
+      "french",
+      "frans",
+      "français",
+      "francais"
+    ],
+    "English": [
+      "english",
+      "engels",
+      "anglais"
+    ],
+    "German": [
+      "german",
+      "duits",
+      "allemand",
+      "deutsch"
+    ]
+  },
+  "locations": {
+    "Brussels": {
+      "aliases": [
+        "brussels",
+        "bruxelles",
+        "brussel",
+        "evere",
+        "etterbeek",
+        "ixelles",
+        "elsene",
+        "anderlecht",
+        "schaerbeek",
+        "uccle"
+      ],
+      "province": "Brussels-Capital"
+    },
+    "Antwerp": {
+      "aliases": [
+        "antwerp",
+        "antwerpen",
+        "anvers",
+        "mechelen",
+        "malines",
+        "lier",
+        "turnhout",
+        "geel",
+        "mortsel"
+      ],
+      "province": "Antwerp"
+    },
+    "Ghent": {
+      "aliases": [
+        "ghent",
+        "gent",
+        "gand",
+        "aalst",
+        "sint-niklaas",
+        "dendermonde",
+        "eeklo"
+      ],
+      "province": "East Flanders"
+    },
+    "Bruges": {
+      "aliases": [
+        "bruges",
+        "brugge",
+        "kortrijk",
+        "courtrai",
+        "ostend",
+        "oostende",
+        "roeselare",
+        "ieper"
+      ],
+      "province": "West Flanders"
+    },
+    "Leuven": {
+      "aliases": [
+        "leuven",
+        "louvain",
+        "vilvoorde",
+        "zaventem",
+        "diegem",
+        "machelen",
+        "asse",
+        "halle",
+        "dilbeek",
+        "grimbergen"
+      ],
+      "province": "Flemish Brabant"
+    },
+    "Hasselt": {
+      "aliases": [
+        "hasselt",
+        "genk",
+        "sint-truiden",
+        "tongeren",
+        "beringen"
+      ],
+      "province": "Limburg"
+    },
+    "Wavre": {
+      "aliases": [
+        "wavre",
+        "waver",
+        "louvain-la-neuve",
+        "ottignies",
+        "nivelles",
+        "waterloo",
+        "braine-l'alleud",
+        "mont-saint-guibert"
+      ],
+      "province": "Walloon Brabant"
+    },
+    "Liège": {
+      "aliases": [
+        "liège",
+        "liege",
+        "luik",
+        "verviers",
+        "seraing",
+        "herstal"
+      ],
+      "province": "Liège"
+    },
+    "Namur": {
+      "aliases": [
+        "namur",
+        "namen",
+        "gembloux",
+        "dinant"
+      ],
+      "province": "Namur"
+    },
+    "Charleroi": {
+      "aliases": [
+        "charleroi",
+        "mons",
+        "bergen",
+        "tournai",
+        "la louvière",
+        "mouscron"
+      ],
+      "province": "Hainaut"
+    },
+    "Arlon": {
+      "aliases": [
+        "arlon",
+        "bastogne",
+        "marche-en-famenne"
+      ],
+      "province": "Luxembourg"
+    },
+    "Belgium": {
+      "aliases": [
+        "belgium",
+        "belgique",
+        "belgië",
+        "belgie",
+        "belgien"
+      ],
+      "province": ""
+    }
+  },
+  "remote": [
+    "remote",
+    "thuiswerk",
+    "télétravail",
+    "teletravail",
+    "hybrid",
+    "hybride"
+  ],
+  "clearance": [
+    "security clearance",
+    "veiligheidsmachtiging",
+    "veiligheidsonderzoek",
+    "habilitation de sécurité",
+    "habilitation de securite",
+    "habilitation",
+    "nato secret",
+    "cosmic top secret",
+    "eu secret",
+    "secret clearance",
+    "clearance"
+  ],
+  "contract": {
+    "freelance": [
+      "freelance",
+      "freelancer",
+      "zelfstandige",
+      "zelfstandig",
+      "indépendant",
+      "independant",
+      "independent contractor",
+      "contractor",
+      "consultancy assignment",
+      "mission de",
+      "opdracht",
+      "day rate",
+      "dagtarief",
+      "tarif journalier"
+    ],
+    "permanent": [
+      "permanent",
+      "vast contract",
+      "contract onbepaalde duur",
+      "onbepaalde duur",
+      "cdi",
+      "contrat à durée indéterminée",
+      "durée indéterminée",
+      "full-time employee",
+      "vaste job",
+      "vaste aanstelling"
+    ],
+    "interim": [
+      "interim",
+      "intérim",
+      "uitzendcontract"
+    ]
+  },
+  "sections": {
+    "must": [
+      "must have",
+      "must-have",
+      "must haves",
+      "must",
+      "required",
+      "requirements",
+      "requirement",
+      "required skills",
+      "what you bring",
+      "you have",
+      "your profile",
+      "profile",
+      "qualifications",
+      "essential",
+      "vereist",
+      "vereisten",
+      "vereiste",
+      "jouw profiel",
+      "je profiel",
+      "profiel",
+      "wat breng je mee",
+      "wat verwachten we",
+      "exigé",
+      "exigés",
+      "exigences",
+      "requis",
+      "prérequis",
+      "pré-requis",
+      "prerequisites",
+      "pre-requisites",
+      "indispensable",
+      "votre profil",
+      "profil",
+      "compétences requises"
+    ],
+    "nice": [
+      "nice to have",
+      "nice-to-have",
+      "nice to haves",
+      "a plus",
+      "plus",
+      "bonus",
+      "preferred",
+      "optional",
+      "is a plus",
+      "pluspunt",
+      "een plus",
+      "troef",
+      "is een troef",
+      "pré",
+      "préférable",
+      "souhaité",
+      "souhaitable",
+      "un atout",
+      "atout",
+      "un plus",
+      "est un plus",
+      "bij voorkeur",
+      "pluspunten",
+      "troeven",
+      "atouts",
+      "pluses",
+      "bonus points",
+      "extra",
+      "assets",
+      "nice-to-haves",
+      "nice to haves",
+      "optionnel",
+      "optioneel"
+    ],
+    "other": [
+      "your role",
+      "your tasks",
+      "responsibilities",
+      "the job",
+      "job description",
+      "jouw functie",
+      "jouw taken",
+      "taken",
+      "functieomschrijving",
+      "votre mission",
+      "vos missions",
+      "vos tâches",
+      "description du poste",
+      "the role"
+    ],
+    "skip": [
+      "what we offer",
+      "we offer",
+      "our offer",
+      "about us",
+      "about the company",
+      "benefits",
+      "wat bieden wij",
+      "wij bieden",
+      "ons aanbod",
+      "over ons",
+      "voordelen",
+      "nous offrons",
+      "notre offre",
+      "qui sommes-nous",
+      "à propos",
+      "avantages",
+      "how to apply",
+      "interested",
+      "solliciteren",
+      "postuler"
+    ]
+  },
+  "niceLineMarkers": [
+    "is a plus",
+    "nice to have",
+    "nice-to-have",
+    "preferably",
+    "is an advantage",
+    "est un plus",
+    "un atout",
+    "constitue un atout",
+    "de préférence",
+    "is een plus",
+    "een pluspunt",
+    "is een troef",
+    "bij voorkeur",
+    "pluspunt"
+  ],
+  "jdLanguageHints": {
+    "en": [
+      "the",
+      "and",
+      "you",
+      "we",
+      "for",
+      "with",
+      "our",
+      "your",
+      "are",
+      "will"
+    ],
+    "nl": [
+      "de",
+      "het",
+      "een",
+      "en",
+      "van",
+      "wij",
+      "jouw",
+      "je",
+      "voor",
+      "met",
+      "zijn",
+      "ons"
+    ],
+    "fr": [
+      "le",
+      "la",
+      "les",
+      "vous",
+      "nous",
+      "pour",
+      "avec",
+      "et",
+      "des",
+      "une",
+      "votre",
+      "est"
+    ]
+  }
+}

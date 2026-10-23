@@ -135,23 +135,35 @@
   function busyText(n) { return n > 0 ? "Sheet busy, retrying… (attempt " + n + ")" : null; }
   function uniqSorted(arr) { var s = {}; arr.forEach(function (x) { if (x) s[x] = 1; }); return Object.keys(s).sort(); }
 
-  // ---------------------------------------------------------------- Atlas badges ("Atlas: N (P / F)")
+  // ---------------------------------------------------------------- Atlas badges ("N matching titles in <pool> (M in pool)")
   // Counts load lazily, in batches of 10, one request at a time, and are remembered for this page.
   var atlasOn = body.getAttribute("data-atlas") === "on";
+  var jdOn = body.getAttribute("data-jd") === "on";
+  function fmt(n) { return Number(n || 0).toLocaleString("en-GB"); }
   var atlasCache = {}, atlasQueue = [], atlasTimer = null, atlasBusy = false;
   function atlasKey(t, s, g) { return [t || "", s || "", g || ""].join("\u0001"); }
-  function candidatesHref(title, sub, group) {
+  function candidatesHref(title, sub, group, jobUrl) {
     var q = [];
     if (title) q.push("title=" + encodeURIComponent(title));
     if (sub) q.push("sub=" + encodeURIComponent(sub));
     if (group) q.push("group=" + encodeURIComponent(group));
-    return "/candidates" + (q.length ? "?" + q.join("&") : "");
+    if (jobUrl) q.push("jobUrl=" + encodeURIComponent(jobUrl));
+    return "/candidates" + (q.length ? "?" + q.join("&") : "") + (jobUrl ? "#jd" : "");
+  }
+  function matchLink(title, sub, group, jobUrl) {
+    if (!jdOn || !(title || sub)) return null;
+    return h("a", { class: "sd-match-link", href: candidatesHref(title, sub, group, jobUrl || ""), text: "Match candidates", title: "Match Atlas candidates to this job description" });
+  }
+  function poolText(r) {
+    var pools = (r.pools || []).join(" + ");
+    if (r.n === null || r.n === undefined) return fmt(r.m) + " in " + pools + (r.index === "building" ? " · title index building…" : " · title index not built yet");
+    return fmt(r.n) + " matching title" + (r.n === 1 ? "" : "s") + " in " + pools + " (" + fmt(r.m) + " in pool)";
   }
   function fillAtlas(el, r) {
     el.classList.remove("sd-atlas-none");
     if (r.none) { el.textContent = "No matching list"; el.classList.add("sd-atlas-none"); el.title = "No Atlas candidate list matches this role (see storage/atlas-list-map.json)"; }
     else if (r.error) { el.textContent = r.error === "rate" ? "Atlas: busy, try later" : "Atlas: unavailable"; }
-    else { el.textContent = "Atlas: " + r.n + " (" + r.p + " / " + r.f + ")"; el.title = r.n + " candidates (" + r.p + " permanent / " + r.f + " freelance) via " + r.reason + ": " + r.families.join(", "); }
+    else { el.textContent = "Atlas: " + poolText(r); el.title = "Matched via " + r.reason + ". Click to see the candidates."; }
   }
   function atlasBadge(title, sub, group) {
     if (!atlasOn || !(title || sub)) return null;
@@ -247,6 +259,29 @@
         .then(function () { delete st.pending[row.key]; render(); });
     }
 
+    // "Rebuild index": starts a build (at most hourly) and keeps it going in ~20 s steps while this page is open.
+    function rebuild(action) {
+      st.indexing = true; st.notice = null; render();
+      api("/api/atlas/index", { method: "POST", body: { action: action } })
+        .then(function (r) {
+          if (st.view) st.view.index = r;
+          if (r.result === "done") { st.notice = { kind: "ok", text: "Title index built: " + fmt(r.entries) + " people." }; st.indexing = false; render(); return; }
+          if (r.state === "running") { render(); setTimeout(function () { rebuild("continue"); }, r.result === "paused" ? 20000 : 300); return; }
+          st.indexing = false; render();
+        }, function (e) { st.notice = { kind: e.code === "REBUILD_TOO_SOON" ? "warn" : "error", text: e.message }; st.indexing = false; render(); });
+    }
+    function indexLine(ix) {
+      if (!ix) return null;
+      var text = ix.state === "running"
+        ? "Title index: building… " + (ix.phase === "members" ? "reading pool members (" + ix.poolsScanned + " of " + ix.pools + " pools)" : fmt(ix.done) + " of " + fmt(ix.total) + " people")
+        : st.indexing ? "Title index: starting… (reading the pools takes a moment)"
+        : ix.builtAt ? "Title index: " + fmt(ix.entries) + " people · built " + when(ix.builtAt) : "Title index: not built yet";
+      return h("div", { class: "flex flex-wrap items-center gap-2 text-sm text-white/70" },
+        st.indexing ? h("span", { class: "sd-spinner" }) : null, h("span", { text: text }),
+        h("button", { type: "button", class: "sd-btn-secondary", disabled: st.indexing, onclick: function () { rebuild(ix.state === "running" ? "continue" : "start"); },
+          text: ix.state === "running" ? (st.indexing ? "Building…" : "Continue building") : "Rebuild index" }));
+    }
+
     function renderHeader() {
       clear(header);
       var v = st.view;
@@ -312,7 +347,7 @@
             h("div", { class: "mt-1.5 flex flex-wrap gap-1.5" },
               row.roleGroup ? chip(row.roleGroup, "pink") : null, row.roleSubGroup ? chip(row.roleSubGroup, "pink") : null,
               row.companyType ? chip(row.companyType) : null, row.location ? chip(row.location) : null,
-              atlasBadge(row.jobTitle, row.roleSubGroup, row.roleGroup)),
+              atlasBadge(row.jobTitle, row.roleSubGroup, row.roleGroup), matchLink(row.jobTitle, row.roleSubGroup, row.roleGroup, row.jobUrl)),
             actions,
             details([["Notes", row.notes], ["Lemlist / Prior Outreach", row.priorOutreach], ["Verified Evidence", row.verifiedEvidence],
               ["Matched keyword", row.matchedKeyword], ["Source", row.source], ["Status", row.status], ["Domain", row.domain], ["My comments", row.myComments]]))));
@@ -337,7 +372,7 @@
     }
 
     function render() { renderHeader(); renderMsgs(); renderList(); }
-    load();
+    load().then(function () { if (st.view && st.view.index && st.view.index.state === "running" && !st.indexing) rebuild("continue"); });
   }
 
   // ================================================================ Verified page
@@ -536,7 +571,7 @@
         h("div", { class: "mt-1.5 flex flex-wrap items-center gap-1.5 text-sm" },
           job.roleGroup ? chip(job.roleGroup, "pink") : null, job.roleSubGroup ? chip(job.roleSubGroup, "pink") : null,
           job.companyType ? chip(job.companyType) : null, job.location ? chip(job.location) : null,
-          atlasBadge(job.jobTitle, job.roleSubGroup, job.roleGroup),
+          atlasBadge(job.jobTitle, job.roleSubGroup, job.roleGroup), matchLink(job.jobTitle, job.roleSubGroup, job.roleGroup, job.jobUrl),
           href ? h("a", { href: href, target: "_blank", rel: "noopener noreferrer", class: "ml-1 font-medium text-pink-soft hover:underline", text: "Open job ↗" }) : null),
         details([["Notes", job.notes], ["Lemlist / Prior Outreach", job.priorOutreach], ["Verified Evidence", job.verifiedEvidence], ["My comments", job.myComments]]),
         h("ul", { class: "mt-3 space-y-2" }, cards.map(function (c) { return dmCard(job, c, job.cards.indexOf(c)); })),
@@ -567,13 +602,14 @@
       });
     }
     function render() { renderHeader(); renderMsgs(); renderList(); }
-    load();
+    load().then(function () { if (st.view && st.view.index && st.view.index.state === "running" && !st.indexing) rebuild("continue"); });
   }
 
-  // ================================================================ Candidates page (Atlas lists, read-only)
+  // ================================================================ Candidates page (Atlas pools + title index, JD matching)
   function candidatesPage() {
     var params = new URLSearchParams(window.location.search);
-    var st = { title: params.get("title") || "", sub: params.get("sub") || "", group: params.get("group") || "", page: 1, data: null, loading: false, error: null, busy: null, cvMsg: {} };
+    var st = { title: params.get("title") || "", sub: params.get("sub") || "", group: params.get("group") || "", jobUrl: params.get("jobUrl") || "",
+      all: params.get("all") === "1", page: 1, data: null, loading: false, error: null, busy: null };
     clear(app);
     if (!atlasOn) {
       app.appendChild(notice("warn", "Atlas is not configured. Add ATLAS_API_KEY to config.php (see DEPLOY-20I.md)."));
@@ -582,19 +618,20 @@
     var form = h("form", { class: "space-y-3 rounded-2xl border border-line bg-card/80 p-3" });
     var msgs = h("div", { class: "space-y-2" });
     var results = h("div", { class: "space-y-3" });
-    app.appendChild(h("div", { class: "space-y-4" }, form, msgs, results));
+    var jdBox = h("section", { id: "jd", class: "space-y-3" });
+    app.appendChild(h("div", { class: "space-y-4" }, jdOn ? jdBox : null, form, msgs, results));
 
     function syncUrl() {
-      var q = candidatesHref(st.title, st.sub, st.group);
-      try { window.history.replaceState(null, "", q); } catch (e) { /* ignore */ }
+      var q = candidatesHref(st.title, st.sub, st.group) + (st.all ? (st.title || st.sub || st.group ? "&" : "?") + "all=1" : "");
+      try { window.history.replaceState(null, "", q + (window.location.hash || "")); } catch (e) { /* ignore */ }
     }
     function load() {
       if (!st.title.trim() && !st.sub) { st.data = null; render(); return; }
       st.loading = true; st.error = null; syncUrl(); render();
-      var q = "?title=" + encodeURIComponent(st.title) + "&sub=" + encodeURIComponent(st.sub) + "&group=" + encodeURIComponent(st.group) + "&page=" + st.page;
+      var q = "?title=" + encodeURIComponent(st.title) + "&sub=" + encodeURIComponent(st.sub) + "&group=" + encodeURIComponent(st.group) + "&page=" + st.page + (st.all ? "&all=1" : "");
       api("/api/atlas/search" + q, { onBusy: function (n) { st.busy = busyText(n); renderMsgs(); } })
         .then(function (d) { st.data = d; st.page = d.page || 1; }, function (e) { st.error = e.message; })
-        .then(function () { st.loading = false; render(); });
+        .then(function () { st.loading = false; st.busy = null; render(); });
     }
 
     function renderForm() {
@@ -602,7 +639,7 @@
       var input = h("input", { class: fieldClass, type: "search", name: "title", placeholder: "Job title, e.g. Security Architect", value: st.title, "aria-label": "Job title" });
       form.onsubmit = function (e) { e.preventDefault(); st.title = input.value; st.page = 1; load(); };
       form.appendChild(h("div", null, h("h1", { class: "text-lg font-semibold", text: "Candidates in Atlas" }),
-        h("p", { class: "text-sm text-white/70", text: "Searches your Atlas candidate lists (Permanent and Freelance) that match the role. Read-only." })));
+        h("p", { class: "text-sm text-white/70", text: "Finds the matching Atlas pool and the people in it whose current title matches. Read-only." })));
       form.appendChild(h("div", { class: "flex gap-2" }, input, h("button", { type: "submit", class: "rounded-xl bg-pink px-4 py-2 text-sm font-semibold text-white hover:brightness-110", text: "Search" })));
       if (st.sub || st.group) {
         form.appendChild(h("div", { class: "flex flex-wrap items-center gap-1.5 text-sm" },
@@ -615,7 +652,7 @@
       clear(msgs);
       if (st.busy) msgs.appendChild(notice("busy", st.busy));
       if (st.error) msgs.appendChild(notice("error", st.error));
-      if (st.loading) msgs.appendChild(h("p", { class: "flex items-center gap-2 text-sm text-white/70" }, h("span", { class: "sd-spinner" }), " Reading Atlas lists…"));
+      if (st.loading) msgs.appendChild(h("p", { class: "flex items-center gap-2 text-sm text-white/70" }, h("span", { class: "sd-spinner" }), " Reading Atlas…"));
     }
     function cvButton(m) {
       var btn = h("button", { type: "button", class: "sd-btn-secondary", text: "CV" });
@@ -636,11 +673,10 @@
     function member(m) {
       var href = safeHref(m.profileUrl);
       return h("li", { class: "rounded-2xl border border-line bg-card p-3" },
-        h("div", { class: "flex items-start justify-between gap-2" },
-          h("div", { class: "min-w-0" },
-            h("h3", { class: "font-semibold leading-snug", text: m.name }),
-            h("p", { class: "text-sm text-white/85", text: [m.role, m.company].filter(Boolean).join(" · ") || "—" })),
-          h("div", { class: "flex flex-wrap gap-1" }, m.types.map(function (t) { return chip(t === "permanent" ? "Permanent" : "Freelance", t === "permanent" ? "pink" : null); }))),
+        h("div", { class: "min-w-0" },
+          h("h3", { class: "font-semibold leading-snug", text: m.name }),
+          h("p", { class: "text-sm text-white/85", text: [m.role, m.company].filter(Boolean).join(" · ") || "—" })),
+        (m.skills && m.skills.length) ? h("div", { class: "mt-1.5 flex flex-wrap gap-1" }, m.skills.slice(0, 8).map(function (s) { return chip(s); })) : null,
         h("div", { class: "mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" },
           m.location ? h("span", { class: "text-white/70", text: m.location }) : null,
           m.updatedAt ? h("span", { class: "text-xs text-white/50", text: "Last updated " + m.updatedAt }) : null,
@@ -652,18 +688,23 @@
       var d = st.data;
       if (!d) { results.appendChild(h("p", { class: "text-sm text-white/60", text: "Type a job title to see matching candidates." })); return; }
       if (!d.families.length) {
-        results.appendChild(notice("warn", "No matching list for \"" + (d.normalisedTitle || st.title) + "\". Add keywords to storage/atlas-list-map.json to map this role to a list family."));
+        results.appendChild(notice("warn", "No matching pool for \"" + (d.normalisedTitle || st.title) + "\". Add a keyword to a pool on the Lists page."));
         return;
       }
-      var c = d.counts;
-      results.appendChild(h("section", { class: "space-y-2 rounded-2xl border border-line bg-card/80 p-3" },
-        h("p", { class: "text-base" }, h("strong", { class: "text-white", text: String(c.n) }), " candidates (",
-          h("strong", { class: "text-pink-soft", text: String(c.p) }), " permanent / ", h("strong", { class: "text-white", text: String(c.f) }), " freelance)"),
-        h("p", { class: "text-xs text-white/50", text: "Matched by " + d.reason + (d.normalisedTitle ? " for \"" + d.normalisedTitle + "\"" : "") + ". People on several lists are counted once." }),
-        h("ul", { class: "space-y-1 text-sm" }, c.lists.map(function (l) {
-          return h("li", { class: l.found ? "text-white/85" : "text-warn", text: l.name + " · " + (l.found ? l.count + " members" : "not visible to the API key") });
-        }))));
-      if (!d.members.length) return;
+      var pools = d.families.join(" + ");
+      var head = h("section", { class: "space-y-2 rounded-2xl border border-line bg-card/80 p-3" });
+      if (d.n === null) {
+        head.appendChild(h("p", { class: "text-base" }, h("strong", { class: "text-white", text: fmt(d.m) }), " people in " + pools));
+        head.appendChild(notice("warn", d.index === "building" ? "Title index building… Showing everyone in the pool for now." : "The title index is not built yet (Lists → Rebuild index). Showing everyone in the pool."));
+      } else {
+        head.appendChild(h("p", { class: "text-base" }, h("strong", { class: "text-pink-soft", text: fmt(d.n) }), " matching title" + (d.n === 1 ? "" : "s") + " in " + pools + " (",
+          h("strong", { class: "text-white", text: fmt(d.m) }), " in pool)"));
+        head.appendChild(h("div", { class: "flex flex-wrap items-center gap-2 text-sm" },
+          h("span", { class: "text-xs text-white/50", text: "Title words: " + (d.terms || []).join(", ") + " · matched by " + d.reason }),
+          h("button", { type: "button", class: "sd-btn-secondary", text: st.all ? "Only matching titles" : "Show whole pool", onclick: function () { st.all = !st.all; st.page = 1; load(); } })));
+      }
+      results.appendChild(head);
+      if (!d.members.length) { results.appendChild(h("p", { class: "text-sm text-white/60", text: "Nobody in the pool has a matching current title. Try “Show whole pool” or JD matching." })); return; }
       results.appendChild(h("ul", { class: "space-y-3" }, d.members.map(member)));
       if (d.totalPages > 1) {
         results.appendChild(h("div", { class: "flex items-center justify-between gap-2 text-sm" },
@@ -675,13 +716,321 @@
     function render() { renderForm(); renderMsgs(); renderResults(); }
     render();
     load();
+    if (jdOn) jdMatching(jdBox, st, cvButton);
+  }
+
+  // ---------------------------------------------------------------- JD matching: JD -> requirements -> ranked candidates
+  // Rule-based by default (no paid AI). "Deep match in Claude" copies a prompt with person IDs only.
+  function jdMatching(box, page, cvButton) {
+    var aiOn = body.getAttribute("data-ai") === "on";
+    var prospeoOn = body.getAttribute("data-prospeo") === "on";
+    var jd = { text: "", fetchNote: null, fetching: false, parsing: false, req: null, error: null, status: null,
+      run: null, results: [], pageNo: 1, totalPages: 0, progress: null, stopped: false, copied: null };
+    var top = h("div", { class: "space-y-3 rounded-2xl border border-pink/50 bg-card/80 p-3" });
+    var out = h("div", { class: "space-y-3" });
+    var market = h("div", { class: "space-y-3" });
+    box.appendChild(top);
+    box.appendChild(out);
+    box.appendChild(market);
+
+    function loadStatus() {
+      api("/api/jd/status").then(function (s) { jd.status = s; renderTop(); }, function () { /* shown on use */ });
+    }
+    function fetchJob() {
+      jd.fetching = true; renderTop();
+      api("/api/jd/fetch", { method: "POST", body: { url: page.jobUrl } })
+        .then(function (r) {
+          if (r.ok) { jd.text = r.text; jd.fetchNote = { kind: "ok", text: "Read from " + r.host + ". Check the text, then click “Extract requirements”." }; }
+          else jd.fetchNote = { kind: "warn", text: r.reason + " Paste the job description below." };
+        }, function (e) { jd.fetchNote = { kind: "warn", text: e.message + " Paste the job description below." }; })
+        .then(function () { jd.fetching = false; renderTop(); });
+    }
+    function parse() {
+      jd.parsing = true; jd.error = null; renderTop();
+      api("/api/jd/parse", { method: "POST", body: { text: jd.text } })
+        .then(function (r) { jd.req = r.requirements; jd.lang = r.jdLanguage; }, function (e) { jd.error = e.message; })
+        .then(function () { jd.parsing = false; renderTop(); renderMarket(); loadStatus(); });
+    }
+    function startMatch() {
+      jd.error = null; jd.results = []; jd.stopped = false; jd.copied = null; jd.progress = { text: "Ranking the pool from the title index…" };
+      renderTop(); renderOut();
+      api("/api/jd/match", { method: "POST", body: { requirements: jd.req, title: page.title, sub: page.sub, group: page.group, jdText: jd.text } })
+        .then(function (r) {
+          jd.run = r;
+          if (r.engine === "ai") {
+            if (!r.shortlisted) { jd.progress = null; jd.error = "Nobody in " + (r.pools.join(" + ") || "the index") + " matches these requirements well enough to score."; renderOut(); return; }
+            return nextBatch(r, 0);
+          }
+          jd.progress = null; jd.results = r.results; jd.pageNo = r.page; jd.totalPages = r.totalPages;
+          if (!r.ranked) jd.error = "Nobody in " + (r.pools.join(" + ") || "the index") + " matches these requirements.";
+          renderOut();
+        }, function (e) { jd.progress = null; jd.error = e.message; renderOut(); })
+        .then(function () { loadStatus(); });
+    }
+    function goPage(n) {
+      jd.progress = { text: "Reading page " + n + "…" }; renderOut();
+      api("/api/jd/page", { method: "POST", body: { matchId: jd.run.matchId, page: n } })
+        .then(function (r) { jd.results = r.results; jd.pageNo = r.page; jd.totalPages = r.totalPages; }, function (e) { jd.error = e.message; })
+        .then(function () { jd.progress = null; renderOut(); });
+    }
+    function nextBatch(r, i) {
+      if (i >= r.batches || jd.stopped) { jd.progress = null; renderOut(); return; }
+      jd.progress = { text: "AI is scoring candidates " + (i * r.batchSize + 1) + "–" + Math.min(r.shortlisted, (i + 1) * r.batchSize) + " of " + r.shortlisted + "…" };
+      renderOut();
+      return api("/api/jd/batch", { method: "POST", body: { matchId: r.matchId, batch: i } })
+        .then(function (b) {
+          jd.results = jd.results.concat(b.results).sort(function (a, c) { return c.score - a.score; });
+          return nextBatch(r, i + 1);
+        }, function (e) { jd.progress = null; jd.error = e.message; renderOut(); });
+    }
+    function copyDeepPrompt() {
+      var text = jd.run.deepPrompt;
+      var done = function () { jd.copied = { ok: true }; renderOut(); };
+      var fallback = function () { jd.copied = { ok: false }; renderOut(); };
+      if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+    }
+
+    function field(label, value, onInput, opts) {
+      opts = opts || {};
+      var el = opts.lines ? h("textarea", { class: fieldClass, rows: String(opts.rows || 3) }) : h("input", { class: fieldClass, type: opts.type || "text" });
+      el.value = value === null || value === undefined ? "" : value;
+      el.addEventListener("input", function () { onInput(el.value); });
+      return h("label", { class: "block text-sm" + (opts.wide ? " sm:col-span-2" : "") }, h("span", { class: "mb-1 block text-xs uppercase tracking-wide text-white/50", text: label }), el);
+    }
+    function lines(v) { return String(v || "").split(/\n|,/).map(function (s) { return s.trim(); }).filter(Boolean); }
+
+    function renderTop() {
+      clear(top);
+      var s = jd.status;
+      top.appendChild(h("div", { class: "flex flex-wrap items-start justify-between gap-2" },
+        h("div", null, h("h2", { class: "text-lg font-semibold", text: "Match a job description" }),
+          h("p", { class: "text-sm text-white/70", text: aiOn
+            ? "Reads the JD, ranks the matching pool and lets the AI score the top 40 on their Atlas profile and CV."
+            : "Reads the JD with Signal Desk's dictionary (no paid AI) and ranks everyone in the matching pool on title, skills, seniority and location." })),
+        s && aiOn ? h("span", { class: "text-xs text-white/50", text: s.remainingToday + " of " + s.dailyLimit + " AI matches left today · AI spend €" + s.spentEur.toFixed(2) + " of €" + s.limitEur.toFixed(0) + " this month" }) : null));
+      if (s && !s.indexReady) top.appendChild(notice("warn", "The Atlas title index is not built yet, so matching can't start. Lists → Rebuild index (or wait for tonight's cron run)."));
+      if (jd.fetching) top.appendChild(h("p", { class: "flex items-center gap-2 text-sm text-white/70" }, h("span", { class: "sd-spinner" }), " Reading the job page…"));
+      if (jd.fetchNote) top.appendChild(notice(jd.fetchNote.kind, jd.fetchNote.text));
+      var ta = h("textarea", { class: fieldClass, rows: "8", placeholder: "Paste the job description here (English, Dutch or French)", "aria-label": "Job description" });
+      ta.value = jd.text;
+      ta.addEventListener("input", function () { jd.text = ta.value; });
+      top.appendChild(ta);
+      top.appendChild(h("div", { class: "flex flex-wrap items-center gap-2" },
+        h("button", { type: "button", class: "rounded-xl bg-pink px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50", disabled: jd.parsing || jd.fetching,
+          onclick: parse, text: jd.parsing ? "Extracting…" : (jd.req ? "Extract again" : "Extract requirements") }),
+        page.jobUrl && !jd.fetching ? h("button", { type: "button", class: "sd-btn-secondary", onclick: fetchJob, text: "Read the job page again" }) : null));
+      if (jd.error && !jd.run) top.appendChild(notice("error", jd.error));
+      if (!jd.req) return;
+      var r = jd.req;
+      top.appendChild(h("div", { class: "rounded-xl border border-line/60 bg-black/20 p-3" },
+        h("p", { class: "mb-2 text-sm font-medium text-white", text: "Requirements (check and edit them, then find candidates)" + (jd.lang ? " · JD language: " + jd.lang.toUpperCase() : "") }),
+        h("div", { class: "grid gap-2 sm:grid-cols-2" },
+          field("Role", r.role, function (v) { r.role = v; }),
+          field("Seniority (junior, medior, senior, lead, head, c-level)", r.seniority, function (v) { r.seniority = v.trim().toLowerCase(); }),
+          field("Must have (one per line)", r.mustHave.join("\n"), function (v) { r.mustHave = lines(v); }, { lines: true, rows: 5 }),
+          field("Nice to have (one per line)", r.niceToHave.join("\n"), function (v) { r.niceToHave = lines(v); }, { lines: true, rows: 5 }),
+          field("Min. years of experience", r.minYears, function (v) { r.minYears = v === "" ? null : parseInt(v, 10) || null; }, { type: "number" }),
+          field("Languages", r.languages.join(", "), function (v) { r.languages = lines(v); }),
+          field("Location", r.location, function (v) { r.location = v; }),
+          field("Clearance", r.clearance, function (v) { r.clearance = v; }),
+          field("Contract type", r.contractType, function (v) { r.contractType = v; })),
+        h("div", { class: "mt-3 flex flex-wrap items-center gap-2" },
+          h("button", { type: "button", class: "rounded-xl bg-pink px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50", disabled: !!jd.progress,
+            onclick: startMatch, text: jd.run ? "Find candidates again" : "Find candidates" }),
+          h("span", { class: "text-xs text-white/50", text: aiOn ? "Uses 1 of your daily AI matches." : "Score: title 35 · must-haves 35 · nice-to-haves 10 · seniority 10 · location 10." }))));
+    }
+
+    function scoreBubble(score, title) {
+      var tone = score >= 70 ? "sd-score-high" : score >= 45 ? "sd-score-mid" : "sd-score-low";
+      return h("div", { class: "sd-score " + tone, title: title, text: String(score) });
+    }
+    function ruleCard(c) {
+      var href = safeHref(c.profileUrl);
+      var p = c.parts || {};
+      var why = h("details", { class: "group mt-2" },
+        h("summary", { class: "text-sm text-white/60 hover:text-white" },
+          h("span", { class: "group-open:hidden", text: "▸ Why this score" }), h("span", { class: "hidden group-open:inline", text: "▾ Why this score" })),
+        h("div", { class: "mt-2 space-y-2 text-sm" },
+          h("p", { class: "text-xs text-white/60", text: "Title " + p.title + "/35 · must-haves " + p.must + "/35 · nice-to-haves " + p.nice + "/10 · seniority " + p.seniority + "/10 · location " + p.location + "/10" }),
+          c.matched.length ? h("ul", { class: "space-y-1" }, c.matched.map(function (m) { return h("li", { class: "text-ok", text: "✓ " + m }); })) : null,
+          c.missing.length ? h("ul", { class: "space-y-1" }, c.missing.map(function (m) { return h("li", { class: "text-warn", text: "✗ " + m }); })) : null,
+          h("p", { class: "text-xs text-white/50", text: "Based on the Atlas title index (current and past titles, skills, city). Open the profile to check." })));
+      return h("li", { class: "rounded-2xl border border-line bg-card p-3" },
+        h("div", { class: "flex items-start gap-3" },
+          scoreBubble(c.score, "Rule-based fit (0–100)"),
+          h("div", { class: "min-w-0 flex-1" },
+            h("h3", { class: "font-semibold leading-snug", text: c.rank + ". " + c.name }),
+            h("p", { class: "text-sm text-white/85", text: [c.role, c.company].filter(Boolean).join(" · ") || "—" }),
+            c.location ? h("p", { class: "text-xs text-white/60", text: c.location }) : null,
+            c.matched.length ? h("p", { class: "mt-1 text-sm text-ok", text: "✓ " + c.matched.slice(0, 5).join(" · ") }) : null,
+            c.missing.length ? h("p", { class: "text-sm text-warn", text: "✗ " + c.missing.slice(0, 4).join(" · ") }) : null,
+            why,
+            h("div", { class: "mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" },
+              href ? h("a", { href: href, target: "_blank", rel: "noopener noreferrer", class: "font-medium text-pink-soft hover:underline", text: "Open in Atlas ↗" }) : null,
+              c.hasCv ? cvButton(c) : h("span", { class: "text-xs text-white/40", text: "no CV in Atlas" })))));
+    }
+    function aiCard(c, rank) {
+      var href = safeHref(c.profileUrl);
+      var why = h("details", { class: "group mt-2" },
+        h("summary", { class: "text-sm text-white/60 hover:text-white" },
+          h("span", { class: "group-open:hidden", text: "▸ Why this score" }), h("span", { class: "hidden group-open:inline", text: "▾ Why this score" })),
+        h("div", { class: "mt-2 space-y-2 text-sm" },
+          c.met.length ? h("ul", { class: "space-y-1" }, c.met.map(function (m) { return h("li", null, h("span", { class: "text-ok", text: "✓ " + m.requirement }), h("span", { class: "text-white/70", text: " — " + m.evidence })); })) : null,
+          c.gaps.length ? h("ul", { class: "space-y-1" }, c.gaps.map(function (g) { return h("li", { class: "text-warn", text: "✗ " + g }); })) : null,
+          c.risks.length ? h("ul", { class: "space-y-1" }, c.risks.map(function (g) { return h("li", { class: "text-bad", text: "⚠ " + g }); })) : null));
+      return h("li", { class: "rounded-2xl border border-line bg-card p-3" },
+        h("div", { class: "flex items-start gap-3" },
+          scoreBubble(c.score, "AI fit score (0–100)"),
+          h("div", { class: "min-w-0 flex-1" },
+            h("h3", { class: "font-semibold leading-snug", text: (rank + 1) + ". " + c.name }),
+            h("p", { class: "text-sm text-white/85", text: [c.role, c.company].filter(Boolean).join(" · ") || "—" }),
+            why,
+            h("div", { class: "mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" },
+              href ? h("a", { href: href, target: "_blank", rel: "noopener noreferrer", class: "font-medium text-pink-soft hover:underline", text: "Open in Atlas ↗" }) : null,
+              cvButton(c)))));
+    }
+    function renderOut() {
+      clear(out);
+      if (!jd.run && !jd.progress) { if (jd.error && jd.req) out.appendChild(notice("error", jd.error)); return; }
+      var r = jd.run;
+      if (r) {
+        out.appendChild(h("div", { class: "flex flex-wrap items-center justify-between gap-2" },
+          h("p", { class: "text-sm text-white/70", text: "Pool: " + (r.pools.join(" + ") || "all pools") + " · " + fmt(r.poolSize) + " people · " + (r.engine === "ai" ? "AI scores the top " + r.shortlisted : "top " + r.ranked + " shown") }),
+          h("button", { type: "button", class: "sd-btn-secondary", onclick: copyDeepPrompt, title: "Copies a prompt for Claude with the JD, the requirements, the pool and the top 20 Atlas person IDs (no names)", text: "Deep match in Claude" })));
+        if (jd.copied && jd.copied.ok) out.appendChild(notice("ok", "Prompt copied. Paste it into Claude (with the Atlas connector switched on). It contains Atlas person IDs only, no names.", function () { jd.copied = null; renderOut(); }));
+        if (jd.copied && !jd.copied.ok) {
+          var ta = h("textarea", { class: fieldClass, rows: "8", readonly: true, "aria-label": "Prompt for Claude" });
+          ta.value = r.deepPrompt;
+          out.appendChild(notice("warn", "Copy didn't work in this browser: select the text below and copy it."));
+          out.appendChild(ta);
+          setTimeout(function () { ta.focus(); ta.select(); }, 0);
+        }
+      }
+      out.appendChild(notice("warn", r && r.engine === "ai" ? "AI suggestion: check before contacting." : "Rule-based suggestion from titles and skills in Atlas: check the profile before contacting."));
+      if (jd.progress) out.appendChild(h("div", { class: "flex flex-wrap items-center gap-2" },
+        h("p", { class: "flex items-center gap-2 text-sm text-white/70" }, h("span", { class: "sd-spinner" }), " " + jd.progress.text),
+        r && r.engine === "ai" ? h("button", { type: "button", class: "sd-btn-secondary", text: "Stop", onclick: function () { jd.stopped = true; } }) : null));
+      if (jd.error) out.appendChild(notice("error", jd.error));
+      if (!jd.results.length) return;
+      out.appendChild(h("ul", { class: "space-y-3" }, r && r.engine === "ai" ? jd.results.map(aiCard) : jd.results.map(ruleCard)));
+      if (r && r.engine !== "ai" && jd.totalPages > 1) {
+        out.appendChild(h("div", { class: "flex items-center justify-between gap-2 text-sm" },
+          h("button", { type: "button", class: "sd-btn-secondary", disabled: jd.pageNo <= 1 || !!jd.progress, onclick: function () { goPage(jd.pageNo - 1); }, text: "← Previous" }),
+          h("span", { class: "text-white/60", text: "Page " + jd.pageNo + " of " + jd.totalPages }),
+          h("button", { type: "button", class: "sd-btn-secondary", disabled: jd.pageNo >= jd.totalPages || !!jd.progress, onclick: function () { goPage(jd.pageNo + 1); }, text: "Next →" })));
+      }
+    }
+
+    // ---------------------------------------------------------------- In the market (Prospeo)
+    var mk = { status: null, filters: null, preparing: false, searching: false, data: null, page: 1, error: null, reveal: {} };
+    var SENIORITIES = ["Founder/Owner", "C-Suite", "Partner", "Vice President", "Head", "Director", "Manager", "Senior", "Entry", "Intern"];
+    function mkStatus() { api("/api/prospeo/status").then(function (s) { mk.status = s; renderMarket(); }, function (e) { mk.error = e.message; renderMarket(); }); }
+    function prepare() {
+      mk.preparing = true; mk.error = null; renderMarket();
+      api("/api/prospeo/filters", { method: "POST", body: { requirements: jd.req } })
+        .then(function (f) { mk.filters = f; }, function (e) { mk.error = e.message; })
+        .then(function () { mk.preparing = false; renderMarket(); });
+    }
+    function search(n) {
+      mk.searching = true; mk.error = null; renderMarket();
+      api("/api/prospeo/search", { method: "POST", body: { filters: mk.filters, page: n, requirements: jd.req } })
+        .then(function (d) { mk.data = d; mk.page = d.page; if (mk.status) mk.status.usedToday = d.credits.usedToday; }, function (e) { mk.error = e.message; })
+        .then(function () { mk.searching = false; renderMarket(); });
+    }
+    function reveal(c, what) {
+      var st = mk.reveal[c.personId] = mk.reveal[c.personId] || {};
+      st.busy = what; st.error = null; st.confirm = null; renderMarket();
+      api("/api/prospeo/reveal", { method: "POST", body: { personId: c.personId, what: what, confirm: true } })
+        .then(function (r) {
+          if (what === "email") st.email = r.email || "no verified email found (no credit used)";
+          else st.mobile = r.mobile || "no mobile found (no credit used)";
+          if (mk.status) mk.status.usedToday = r.usedToday;
+        }, function (e) { st.error = e.message; })
+        .then(function () { st.busy = null; renderMarket(); });
+    }
+    function marketCard(c) {
+      var st = mk.reveal[c.personId] || {};
+      var li = safeHref(c.linkedinUrl);
+      var actions = h("div", { class: "mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" },
+        li ? h("a", { href: li, target: "_blank", rel: "noopener noreferrer", class: "font-medium text-pink-soft hover:underline", text: "LinkedIn ↗" }) : null,
+        c.inAtlas ? h("a", { href: safeHref(c.inAtlas.profileUrl), target: "_blank", rel: "noopener noreferrer", class: "sd-review-badge", text: "Already in Atlas ↗" }) : null,
+        !st.email ? h("button", { type: "button", class: "sd-btn-secondary", disabled: !!st.busy, onclick: function () { st.confirm = "email"; mk.reveal[c.personId] = st; renderMarket(); }, text: st.busy === "email" ? "Revealing…" : "Reveal contact" }) : null,
+        st.email && !st.mobile ? h("button", { type: "button", class: "sd-btn-secondary", disabled: !!st.busy, onclick: function () { st.confirm = "mobile"; mk.reveal[c.personId] = st; renderMarket(); }, text: st.busy === "mobile" ? "Revealing…" : "Reveal mobile" }) : null);
+      var confirmBox = st.confirm ? h("div", { class: "mt-2 rounded-xl border border-warn/50 bg-warn/10 p-2 text-sm text-warn", role: "alertdialog" },
+        h("p", { text: (st.confirm === "email" ? "Reveal the email address? This costs 1 Prospeo credit (none if nothing is found)." : "Reveal the mobile number? This costs 10 Prospeo credits (none if nothing is found).")
+          + (mk.status ? " Today: " + mk.status.usedToday + " of " + mk.status.cap + " credits used." : "") }),
+        h("div", { class: "mt-2 flex gap-2" },
+          h("button", { type: "button", class: "rounded-xl bg-pink px-3 py-1.5 text-sm font-semibold text-white hover:brightness-110", onclick: function () { reveal(c, st.confirm); }, text: st.confirm === "email" ? "Reveal email (1 credit)" : "Reveal mobile (10 credits)" }),
+          h("button", { type: "button", class: "sd-btn-secondary", onclick: function () { st.confirm = null; renderMarket(); }, text: "Cancel" }))) : null;
+      return h("li", { class: "rounded-2xl border border-line bg-card p-3" },
+        h("div", { class: "flex items-start gap-3" },
+          scoreBubble(c.fit.score, "Fit based on title & company only"),
+          h("div", { class: "min-w-0 flex-1" },
+            h("h3", { class: "font-semibold leading-snug", text: c.name }),
+            h("p", { class: "text-sm text-white/85", text: [c.title, c.company].filter(Boolean).join(" · ") || "—" }),
+            c.location ? h("p", { class: "text-xs text-white/60", text: c.location }) : null,
+            h("p", { class: "text-xs text-white/50", text: "Fit " + c.fit.score + "/100, based on title & company only" + (c.fit.missing.length ? " · missing: " + c.fit.missing.slice(0, 3).join(", ") : "") }),
+            st.email ? h("p", { class: "mt-1 text-sm text-white", text: "Email: " + st.email }) : null,
+            st.mobile ? h("p", { class: "text-sm text-white", text: "Mobile: " + st.mobile }) : null,
+            st.error ? notice("error", st.error) : null,
+            actions, confirmBox)));
+    }
+    function renderMarket() {
+      clear(market);
+      if (!prospeoOn || !jd.req) return;
+      var s = mk.status;
+      var box = h("section", { class: "space-y-3 rounded-2xl border border-line bg-card/80 p-3" },
+        h("div", { class: "flex flex-wrap items-start justify-between gap-2" },
+          h("div", null, h("h2", { class: "text-lg font-semibold", text: "In the market (Prospeo)" }),
+            h("p", { class: "text-sm text-white/70", text: "People outside Atlas who fit the role. Search costs 1 credit per page of 25; contacts only on request." })),
+          s ? h("span", { class: "text-xs text-white/50", text: fmt(s.remaining) + " credits left · today " + s.usedToday + " of " + s.cap + " used" }) : null));
+      market.appendChild(box);
+      if (mk.error) box.appendChild(notice("error", mk.error));
+      if (!mk.filters) {
+        box.appendChild(h("button", { type: "button", class: "sd-btn-secondary", disabled: mk.preparing, onclick: prepare, text: mk.preparing ? "Preparing…" : "Prepare a market search (free)" }));
+        return;
+      }
+      var f = mk.filters;
+      var sen = h("div", { class: "flex flex-wrap gap-2" }, SENIORITIES.map(function (v) {
+        var cb = h("input", { type: "checkbox", class: "h-4 w-4", checked: f.seniority.indexOf(v) >= 0, onchange: function (e) {
+          f.seniority = e.target.checked ? f.seniority.concat([v]) : f.seniority.filter(function (x) { return x !== v; }); } });
+        return h("label", { class: "flex items-center gap-1 text-xs text-white/80" }, cb, v);
+      }));
+      box.appendChild(h("div", { class: "grid gap-2 sm:grid-cols-2" },
+        field("Job titles (one per line, similar titles match too)", f.titles.join("\n"), function (v) { f.titles = lines(v); }, { lines: true, rows: 4 }),
+        field("Keywords (one per line, max 5)", f.keywords.join("\n"), function (v) { f.keywords = lines(v); }, { lines: true, rows: 4 }),
+        field("Locations (Prospeo names, one per line)", f.locations.join("\n"), function (v) { f.locations = lines(v); }, { lines: true, rows: 2 }),
+        h("div", { class: "grid grid-cols-2 gap-2" },
+          field("Years min.", f.yearsMin, function (v) { f.yearsMin = v === "" ? null : parseInt(v, 10); }, { type: "number" }),
+          field("Years max.", f.yearsMax, function (v) { f.yearsMax = v === "" ? null : parseInt(v, 10); }, { type: "number" })),
+        h("div", { class: "sm:col-span-2" }, h("span", { class: "mb-1 block text-xs uppercase tracking-wide text-white/50", text: "Seniority" }), sen)));
+      box.appendChild(h("div", { class: "flex flex-wrap items-center gap-2" },
+        h("button", { type: "button", class: "rounded-xl bg-pink px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50", disabled: mk.searching,
+          onclick: function () { search(1); }, text: mk.searching ? "Searching…" : "Search the market (1 credit / 25 people)" })));
+      var d = mk.data;
+      if (!d) return;
+      box.appendChild(h("p", { class: "text-sm text-white/70", text: fmt(d.total) + " people · page " + d.page + " of " + d.totalPages + (d.credits.free ? " · this page was free (searched before)" : " · " + d.credits.charged + " credit used") }));
+      if (!d.results.length) { box.appendChild(h("p", { class: "text-sm text-white/60", text: "No one matches these filters. Widen the titles or locations." })); return; }
+      box.appendChild(h("ul", { class: "space-y-3" }, d.results.map(marketCard)));
+      if (d.totalPages > 1) {
+        box.appendChild(h("div", { class: "flex items-center justify-between gap-2 text-sm" },
+          h("button", { type: "button", class: "sd-btn-secondary", disabled: d.page <= 1 || mk.searching, onclick: function () { search(d.page - 1); }, text: "← Previous (free if seen)" }),
+          h("span", { class: "text-white/60", text: "Page " + d.page + " of " + d.totalPages }),
+          h("button", { type: "button", class: "sd-btn-secondary", disabled: d.page >= d.totalPages || mk.searching, onclick: function () { search(d.page + 1); }, text: "Next (1 credit) →" })));
+      }
+    }
+
+    renderTop();
+    loadStatus();
+    if (prospeoOn) mkStatus();
+    if (page.jobUrl) fetchJob();
   }
 
   // ================================================================ Lists page (Atlas list map)
   // Families and their Atlas lists, with "New – please review" for auto-created ones. Edits only change
   // storage/atlas-list-map.json on our server, never Atlas.
   function listsPage() {
-    var st = { view: null, loading: true, error: null, notice: null, refreshing: false, onlyReview: false };
+    var st = { view: null, loading: true, error: null, notice: null, refreshing: false, onlyReview: false, indexing: false };
     var header = h("section", { class: "space-y-3 rounded-2xl border border-line bg-card/80 p-3" });
     var msgs = h("div", { class: "space-y-2" });
     var list = h("ul", { class: "space-y-3" });
@@ -705,6 +1054,29 @@
         .then(function () { st.refreshing = false; render(); });
     }
 
+    // "Rebuild index": starts a build (at most hourly) and keeps it going in ~20 s steps while this page is open.
+    function rebuild(action) {
+      st.indexing = true; st.notice = null; render();
+      api("/api/atlas/index", { method: "POST", body: { action: action } })
+        .then(function (r) {
+          if (st.view) st.view.index = r;
+          if (r.result === "done") { st.notice = { kind: "ok", text: "Title index built: " + fmt(r.entries) + " people." }; st.indexing = false; render(); return; }
+          if (r.state === "running") { render(); setTimeout(function () { rebuild("continue"); }, r.result === "paused" ? 20000 : 300); return; }
+          st.indexing = false; render();
+        }, function (e) { st.notice = { kind: e.code === "REBUILD_TOO_SOON" ? "warn" : "error", text: e.message }; st.indexing = false; render(); });
+    }
+    function indexLine(ix) {
+      if (!ix) return null;
+      var text = ix.state === "running"
+        ? "Title index: building… " + (ix.phase === "members" ? "reading pool members (" + ix.poolsScanned + " of " + ix.pools + " pools)" : fmt(ix.done) + " of " + fmt(ix.total) + " people")
+        : st.indexing ? "Title index: starting… (reading the pools takes a moment)"
+        : ix.builtAt ? "Title index: " + fmt(ix.entries) + " people · built " + when(ix.builtAt) : "Title index: not built yet";
+      return h("div", { class: "flex flex-wrap items-center gap-2 text-sm text-white/70" },
+        st.indexing ? h("span", { class: "sd-spinner" }) : null, h("span", { text: text }),
+        h("button", { type: "button", class: "sd-btn-secondary", disabled: st.indexing, onclick: function () { rebuild(ix.state === "running" ? "continue" : "start"); },
+          text: ix.state === "running" ? (st.indexing ? "Building…" : "Continue building") : "Rebuild index" }));
+    }
+
     function renderHeader() {
       clear(header);
       var v = st.view;
@@ -714,6 +1086,7 @@
           h("p", { class: "text-sm text-white/70", text: v ? v.families.length + " families · " + toReview + " to review · last check " + when(v.discoveredAt) : "Loading…" })),
         h("button", { type: "button", class: "sd-btn-secondary", disabled: st.refreshing, onclick: refresh, text: st.refreshing ? "Refreshing…" : "Refresh from Atlas" })));
       header.appendChild(h("p", { class: "text-xs text-white/50", text: "New Atlas lists are picked up automatically (at most once an hour). Editing here changes only Signal Desk's matching rules (storage/atlas-list-map.json), never Atlas." }));
+      if (v) header.appendChild(indexLine(v.index));
       if (toReview) header.appendChild(h("label", { class: "flex items-center gap-2 text-sm text-white/80" },
         h("input", { type: "checkbox", class: "h-5 w-5", checked: st.onlyReview, onchange: function (e) { st.onlyReview = e.target.checked; renderList(); } }), "Only families to review"));
     }
@@ -749,7 +1122,7 @@
             f.auto ? chip("auto") : null)),
         h("ul", { class: "mt-2 space-y-1 text-sm" }, f.lists.map(function (l) {
           return h("li", { class: "flex flex-wrap items-center gap-1.5" },
-            chip(l.type, l.type === "permanent" ? "pink" : null),
+            l.type !== "pool" ? chip(l.type, l.type === "permanent" ? "pink" : null) : null,
             h("span", { class: l.missing ? "text-warn" : "text-white/85", text: l.name }),
             l.missing ? h("span", { class: "sd-review-badge", text: "missing in Atlas" }) : h("span", { class: "text-xs text-white/50", text: (l.count === null ? "?" : l.count) + " members" }),
             l.auto ? h("span", { class: "text-xs text-white/40", text: "added automatically " + (l.addedAt || "") }) : null);
@@ -772,9 +1145,12 @@
       var fams = v.families.slice().sort(function (a, b) { return (a.reviewed === b.reviewed) ? 0 : a.reviewed ? 1 : -1; });
       fams.filter(function (f) { return !st.onlyReview || !f.reviewed; }).forEach(function (f) { list.appendChild(familyCard(f)); });
       if (v.ignoredLists.length) list.appendChild(h("li", { class: "text-xs text-white/50", text: "Ignored lists (not role families): " + v.ignoredLists.map(function (l) { return l.name; }).join("; ") }));
+      if ((v.retiredLists || []).length) list.appendChild(h("li", { class: "text-xs text-white/50" }, h("details", null,
+        h("summary", { text: "▸ Retired lists (" + v.retiredLists.length + "): the old Permanent/Freelance lists, no longer used" }),
+        h("p", { class: "mt-1", text: v.retiredLists.map(function (l) { return l.name; }).join("; ") }))));
     }
     function render() { renderHeader(); renderMsgs(); renderList(); }
-    load();
+    load().then(function () { if (st.view && st.view.index && st.view.index.state === "running" && !st.indexing) rebuild("continue"); });
   }
 
   if (page === "signals") signalsPage();

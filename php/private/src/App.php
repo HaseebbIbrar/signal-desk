@@ -7,6 +7,7 @@ namespace SignalDesk;
 final class App
 {
     private const MAX_BODY = 20000;
+    private const MAX_BODY_JD = 80000; // job descriptions
     private ?Service $service = null;
 
     /** Version used when an asset's modification time can't be read (keeps the URL valid). */
@@ -85,6 +86,31 @@ final class App
     private function requireAtlas(): AtlasListsSource
     {
         return $this->atlas() ?? throw new AppError(503, 'ATLAS_OFF', 'Atlas is not configured (ATLAS_API_KEY in config.php).');
+    }
+
+    private ?JdMatcher $jd = null;
+
+    /** JD matching (Atlas title index; rule-based unless ANTHROPIC_BACKEND switches AI on). */
+    private function jd(): JdMatcher
+    {
+        if ($this->jd) return $this->jd;
+        $llm = Llms::build($this->config);
+        $cv = new CvFetcher();
+        if (Atlas::mode($this->config) === 'mock') $cv->transport = fn (string $url) => ['status' => 200, 'type' => 'text/plain', 'body' => MockAtlas::cvText($url)];
+        return $this->jd = new JdMatcher($this->requireAtlas(), $llm, $this->config['STORAGE_DIR'], $cv);
+    }
+
+    /** Build (part of) the title index from the /lists page: start (at most hourly) or carry on, ~20 s per request. */
+    private function atlasIndex(string $action, string $user): array
+    {
+        $b = $this->requireAtlas()->indexBuilder() ?? throw new AppError(500, 'NO_STORAGE', 'Storage is not available');
+        if (!in_array($action, ['start', 'continue'], true)) throw new ValidationError('action must be start or continue');
+        @set_time_limit(60);
+        $st = $b->status();
+        if ($action === 'continue' && $st['state'] !== 'running') return ['result' => 'idle'] + $st;
+        $r = $b->run(20, $action === 'start' && $st['state'] !== 'running', 'button');
+        Audit::event('atlas_index_button', ['user' => $user, 'action' => $action, 'result' => $r['result']]);
+        return $r;
     }
 
     private static function str(mixed $v, int $max = 300): string
@@ -188,8 +214,13 @@ final class App
                     'verified' => $this->service()->verifiedView(),
                     'atlas/search' => $this->requireAtlas()->search(
                         self::str($_GET['title'] ?? ''), self::str($_GET['sub'] ?? ''), self::str($_GET['group'] ?? ''),
-                        max(1, min(10000, (int) ($_GET['page'] ?? 1))),
+                        max(1, min(10000, (int) ($_GET['page'] ?? 1))), ($_GET['all'] ?? '') === '1',
                     ),
+                    'atlas/index' => ($this->requireAtlas()->indexBuilder() ?? throw new NotFoundError('No index'))->status(),
+                    'jd/status' => ['engine' => $this->jd()->engine(), 'remainingToday' => $this->jd()->dailyLimit()->remaining($user['email']), 'dailyLimit' => JdMatcher::DAILY_MATCHES,
+                        'spentEur' => round(Llms::spendGuard($this->config)->spent(), 2), 'limitEur' => Llms::spendGuard($this->config)->limit(),
+                        'indexReady' => $this->requireAtlas()->index() !== null, 'prospeo' => Prospeo::mode($this->config) !== 'off'],
+                    'prospeo/status' => $this->prospeo()->status(),
                     'atlas/map' => $this->requireAtlas()->mapView(),
                     'atlas/cv' => ['url' => $this->requireAtlas()->cvUrl(self::str($_GET['personId'] ?? '', 64))
                         ?? throw new NotFoundError('No CV for this person in Atlas.')],
@@ -211,8 +242,9 @@ final class App
                 $this->json(['error' => 'Expected JSON', 'code' => 'BAD_CONTENT_TYPE'], 415);
                 return;
             }
-            $raw = (string) file_get_contents('php://input', false, null, 0, self::MAX_BODY + 1);
-            if (strlen($raw) > self::MAX_BODY) throw new ValidationError('Request is too large');
+            $max = str_starts_with($route, 'jd/') ? self::MAX_BODY_JD : self::MAX_BODY;
+            $raw = (string) file_get_contents('php://input', false, null, 0, $max + 1);
+            if (strlen($raw) > $max) throw new ValidationError('Request is too large');
             $body = json_decode($raw, true);
             if (!is_array($body)) throw new ValidationError('Invalid JSON');
             $s = $this->service();
@@ -228,6 +260,18 @@ final class App
                 'atlas/counts' => $this->atlasCounts($body['items'] ?? null),
                 'atlas/map' => $this->requireAtlas()->saveFamily(self::str($body['family'] ?? '', 200), $body['keywords'] ?? null, $body['roleSubGroups'] ?? null, $user['email']),
                 'atlas/refresh' => $this->requireAtlas()->refresh($user['email']),
+                'atlas/index' => $this->atlasIndex(self::str($body['action'] ?? '', 20), $user['email']),
+                'jd/fetch' => $this->jdFetch($body['url'] ?? null),
+                'jd/parse' => $this->jd()->parse($body['text'] ?? null, $user['email']),
+                'jd/match' => $this->jd()->start($body['requirements'] ?? null, self::str($body['title'] ?? ''), self::str($body['sub'] ?? ''), self::str($body['group'] ?? ''), $user['email'], $body['jdText'] ?? ''),
+                'jd/page' => $this->jd()->page(self::str($body['matchId'] ?? '', 40), max(1, min(10, (int) ($body['page'] ?? 1)))),
+                'prospeo/filters' => $this->prospeo()->filtersFor(JdMatcher::requirements($body['requirements'] ?? null)),
+                'prospeo/search' => $this->prospeo()->search($body['filters'] ?? null, max(1, min(1000, (int) ($body['page'] ?? 1))), $body['requirements'] ?? null, $user['email']),
+                'prospeo/reveal' => $this->prospeo()->reveal(self::str($body['personId'] ?? '', 80), self::str($body['what'] ?? 'email', 10), ($body['confirm'] ?? false) === true, $user['email']),
+                'jd/batch' => (function () use ($body, $user) {
+                    @set_time_limit(200);
+                    return $this->jd()->batch(self::str($body['matchId'] ?? '', 40), max(0, min(20, (int) ($body['batch'] ?? 0))), $user['email']);
+                })(),
                 'approve' => $s->approve($row, $job, $user),
                 'undo-approve' => $s->undoApprove($row, $job, $user['email']),
                 default => throw new NotFoundError('Unknown API route'),
@@ -251,14 +295,13 @@ final class App
             $title = self::str($it['title'] ?? '');
             $sub = self::str($it['sub'] ?? '');
             $group = self::str($it['group'] ?? '');
-            $m = $atlas->match($title, $sub, $group);
-            if (!$m['families']) {
-                $out[] = ['none' => true];
-                continue;
-            }
             try {
-                $c = $atlas->counts($m['families']);
-                $out[] = ['n' => $c['n'], 'p' => $c['p'], 'f' => $c['f'], 'families' => $m['families'], 'reason' => $m['reason']];
+                $s = $atlas->summary($title, $sub, $group);
+                if (!empty($s['none'])) {
+                    $out[] = ['none' => true];
+                    continue;
+                }
+                $out[] = ['n' => $s['n'], 'm' => $s['m'], 'pools' => $s['families'], 'reason' => $s['reason'], 'index' => $s['index']];
             } catch (AtlasRateLimited $e) {
                 $out[] = ['error' => 'rate', 'retryAfter' => $e->retryAfter];
             } catch (AppError $e) {
@@ -266,6 +309,26 @@ final class App
             }
         }
         return ['items' => $out];
+    }
+
+    private ?MarketSearch $market = null;
+
+    /** "In the market" (Prospeo). */
+    private function prospeo(): MarketSearch
+    {
+        if ($this->market) return $this->market;
+        $client = Prospeo::client($this->config) ?? throw new AppError(503, 'PROSPEO_OFF', 'Prospeo is not configured (PROSPEO_API_KEY in config.php).');
+        return $this->market = new MarketSearch($client, Prospeo::ledger($this->config), $this->config['STORAGE_DIR'], $this->atlas(),
+            $this->atlas()?->dictionary() ?? JdDictionary::default());
+    }
+
+    /** Read a signal's job page for JD matching; anything blocked or empty asks the user to paste the JD. */
+    private function jdFetch(mixed $url): array
+    {
+        $url = is_string($url) ? trim($url) : '';
+        if ($url === '' || strlen($url) > 2000) throw new ValidationError('Job URL missing');
+        $r = (new JobPageFetcher())->fetch($url);
+        return $r['ok'] ? ['ok' => true, 'text' => $r['text'], 'host' => $r['host']] : ['ok' => false, 'needPaste' => true, 'reason' => $r['reason']];
     }
 
     private function json(mixed $data, int $status = 200): void
@@ -339,7 +402,7 @@ final class Views
         $tab = fn (string $href, string $label, bool $active) => '<a href="' . $href . '"' . ($active ? ' aria-current="page"' : '')
             . ' class="border-b-2 px-3 py-2 text-sm font-medium ' . ($active ? 'border-pink text-white' : 'border-transparent text-white/60 hover:text-white') . '">' . $label . '</a>';
         return self::head('Signal Desk · SwooScale')
-            . '<body class="antialiased" data-page="' . self::e($page) . '" data-csrf="' . self::e($csrf) . '" data-atlas="' . (Atlas::mode($config) === 'off' ? 'off' : 'on') . '"><div class="min-h-dvh">' . self::banner($config)
+            . '<body class="antialiased" data-page="' . self::e($page) . '" data-csrf="' . self::e($csrf) . '" data-atlas="' . (Atlas::mode($config) === 'off' ? 'off' : 'on') . '" data-jd="' . (Atlas::mode($config) !== 'off' ? 'on' : 'off') . '" data-ai="' . (Llms::mode($config) !== 'off' ? 'on' : 'off') . '" data-prospeo="' . (Prospeo::mode($config) !== 'off' ? 'on' : 'off') . '"><div class="min-h-dvh">' . self::banner($config)
             . '<header class="sticky top-0 z-20 border-b border-line/60 bg-black/70 backdrop-blur"><div class="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-3">'
             . '<div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-pink" aria-hidden="true"></span><span class="font-semibold tracking-tight">Signal Desk</span></div>'
             . '<div class="flex items-center gap-3 text-sm"><span class="hidden text-white/60 sm:inline">' . self::e($user['name']) . '</span>'
