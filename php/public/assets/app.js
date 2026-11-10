@@ -378,7 +378,11 @@
   // ================================================================ Verified page
   // One card per verify-tab row (a job can have several decision makers), grouped under the job.
   // Every write sends the card's row number + Job URL; the server refuses if that row moved.
-  function verifiedPage() {
+  // Two tracks with the same workflow: verify tab -> Decision Makers, and Hr signals -> HR Decision Makers.
+  var VERIFIED_CFG = { view: "/api/verified", api: "/api/", title: "Signals to verify", rowWord: "verify", tabName: "verify tab", dm: "Decision Makers" };
+  var HR_CFG = { view: "/api/hr", api: "/api/hr/", title: "HR signals", rowWord: "HR", tabName: "HR signals tab", dm: "HR Decision Makers" };
+  function verifiedPage(cfg) {
+    cfg = cfg || VERIFIED_CFG;
     var st = { jobs: null, warnings: [], loading: true, error: null, busy: null, notice: null, filter: "waiting", search: "", sticky: {} };
     var header = h("section", { class: "space-y-3 rounded-2xl border border-line bg-card/80 p-3" });
     var msgs = h("div", { class: "space-y-2" });
@@ -389,7 +393,7 @@
     function cardId(c) { return c.row + "|" + c.jobUrl; }
     function load() {
       st.loading = true; st.error = null; render();
-      return api("/api/verified", { onBusy: function (n) { st.busy = busyText(n); renderMsgs(); } })
+      return api(cfg.view, { onBusy: function (n) { st.busy = busyText(n); renderMsgs(); } })
         .then(function (v) { st.jobs = v.jobs; st.warnings = v.warnings || []; }, function (e) { st.error = e.message; })
         .then(function () { st.loading = false; render(); });
     }
@@ -419,7 +423,7 @@
           class: "rounded-full border px-3 py-1.5 text-sm " + (st.filter === f ? "border-pink bg-pink/20 text-white" : "border-line text-white/70 hover:text-white") },
           label + " ", h("span", { class: "text-white/60", text: String(n) }));
       };
-      header.appendChild(h("div", null, h("h1", { class: "text-lg font-semibold", text: "Signals to verify" }),
+      header.appendChild(h("div", null, h("h1", { class: "text-lg font-semibold", text: cfg.title }),
         h("p", { class: "text-sm text-white/70" }, st.jobs ? [h("strong", { class: "text-pink-soft", text: String(c.waiting) }), " waiting · ",
           h("strong", { class: "text-white", text: String(c.ready) }), " ready to review · ", h("strong", { class: "text-ok", text: String(c.sent) }), " sent (decision makers)"] : ["Loading…"])));
       header.appendChild(h("div", { class: "flex flex-wrap gap-2" },
@@ -464,9 +468,9 @@
         var v = validateLinks(links);
         if (v.errors.some(Boolean)) { errs = v.errors; drawInputs(); return; }
         if (v.tooMany) { clear(msg); msg.appendChild(notice("error", "At most 10 links per row.")); return; }
-        if (!v.links.length && card.decisionMakers.length && !window.confirm("Clear the LinkedIn cell (column M) on verify row " + card.row + "?")) return;
+        if (!v.links.length && card.decisionMakers.length && !window.confirm("Clear the LinkedIn cell (column M) on " + cfg.rowWord + " row " + card.row + "?")) return;
         saveBtn.disabled = true; saveBtn.textContent = "Saving…"; clear(msg);
-        api("/api/linkedin", { method: "POST", body: Object.assign({ links: v.links }, body), onBusy: function (n) { clear(msg); if (n) msg.appendChild(notice("busy", busyText(n))); } })
+        api(cfg.api + "linkedin", { method: "POST", body: Object.assign({ links: v.links }, body), onBusy: function (n) { clear(msg); if (n) msg.appendChild(notice("busy", busyText(n))); } })
           .then(function (res) {
             st.sticky[cardId(card)] = true;
             updateCard(card.row, { decisionMakers: res.links, status: res.links.length ? "ready" : "waiting", canUndo: false, savedRow: res.row, sentDate: null });
@@ -474,9 +478,9 @@
           }, function (e) { saveBtn.disabled = false; saveBtn.textContent = "Save"; changedError(e, msg); });
       }
       function approve() {
-        if (!window.confirm("Approve " + (card.dmName || "this decision maker") + " for " + job.company + " and add them to the \"Decision Makers\" tab?")) return;
-        clear(approveBox); approveBox.appendChild(h("p", { class: "flex items-center gap-2 text-sm text-white/70" }, h("span", { class: "sd-spinner" }), " Adding to Decision Makers…"));
-        api("/api/approve", { method: "POST", body: body, onBusy: function (n) { clear(msg); if (n) msg.appendChild(notice("busy", busyText(n))); } })
+        if (!window.confirm("Approve " + (card.dmName || "this decision maker") + " for " + job.company + " and add them to the \"" + cfg.dm + "\" tab?")) return;
+        clear(approveBox); approveBox.appendChild(h("p", { class: "flex items-center gap-2 text-sm text-white/70" }, h("span", { class: "sd-spinner" }), " Adding to " + cfg.dm + "…"));
+        api(cfg.api + "approve", { method: "POST", body: body, onBusy: function (n) { clear(msg); if (n) msg.appendChild(notice("busy", busyText(n))); } })
           .then(function (res) {
             st.sticky[cardId(card)] = true;
             st.jobs.forEach(function (j) { j.cards.forEach(function (c) { c.canUndo = false; }); });
@@ -485,8 +489,8 @@
           }, function (e) { st.sticky[cardId(card)] = true; updateCard(card.row, { approveError: e.message, approveCode: e.code }); renderList(); });
       }
       function undo() {
-        if (!window.confirm("Undo: remove the row just added to \"Decision Makers\" for " + (card.dmName || job.company) + "?")) return;
-        api("/api/undo-approve", { method: "POST", body: body, onBusy: function (n) { clear(msg); if (n) msg.appendChild(notice("busy", busyText(n))); } })
+        if (!window.confirm("Undo: remove the row just added to \"" + cfg.dm + "\" for " + (card.dmName || job.company) + "?")) return;
+        api(cfg.api + "undo-approve", { method: "POST", body: body, onBusy: function (n) { clear(msg); if (n) msg.appendChild(notice("busy", busyText(n))); } })
           .then(function () { st.sticky[cardId(card)] = true; updateCard(card.row, { status: "ready", sentDate: null, canUndo: false, approvedNote: "undone", approveError: null }); renderList(); },
             function (e) { st.sticky[cardId(card)] = true; updateCard(card.row, { approveError: e.message, approveCode: e.code, canUndo: false }); renderList(); });
       }
@@ -516,12 +520,12 @@
       if (card.status === "sent") {
         approveBox.appendChild(h("div", { class: "flex flex-wrap items-center gap-3" },
           h("span", { class: "sd-sent", text: "Sent ✓ " + (card.sentDate || "") }),
-          card.approvedNote === "already" ? h("span", { class: "text-xs text-white/60", text: "(already in Decision Makers, nothing added)" }) : null,
+          card.approvedNote === "already" ? h("span", { class: "text-xs text-white/60", text: "(already in " + cfg.dm + ", nothing added)" }) : null,
           card.canUndo ? h("button", { type: "button", class: "sd-btn-secondary", onclick: undo, text: "Undo" }) : null));
       } else if (card.status === "ready" && editable) {
-        approveBox.appendChild(h("button", { type: "button", class: "sd-btn-approve", onclick: approve, text: "✓ Approve → Decision Makers" }));
+        approveBox.appendChild(h("button", { type: "button", class: "sd-btn-approve", onclick: approve, text: "✓ Approve → " + cfg.dm }));
       }
-      if (card.approvedNote === "undone") approveBox.appendChild(h("p", { class: "mt-2 text-sm text-ok", text: "Undone: the row was removed from Decision Makers." }));
+      if (card.approvedNote === "undone") approveBox.appendChild(h("p", { class: "mt-2 text-sm text-ok", text: "Undone: the row was removed from " + cfg.dm + "." }));
       if (card.approveError) changedError({ message: card.approveError, code: card.approveCode }, approveBox.appendChild(h("div", { class: "mt-2" })));
 
       var badge = card.status === "sent" ? chip("✓ Sent", "ok") : card.status === "ready" ? chip("Ready to review", "pink") : chip("Waiting for decision maker");
@@ -529,7 +533,7 @@
         h("div", { class: "flex items-start justify-between gap-2" },
           h("div", { class: "min-w-0" },
             h("h4", { class: "font-semibold leading-snug", text: card.dmName || ("Decision maker " + (index + 1)) }),
-            h("p", { class: "text-xs text-white/50", text: (card.dmTitle ? card.dmTitle + " · " : "") + "verify row " + card.row })),
+            h("p", { class: "text-xs text-white/50", text: (card.dmTitle ? card.dmTitle + " · " : "") + cfg.rowWord + " row " + card.row })),
           badge),
         dmBox, editor,
         card.savedRow ? h("p", { class: "mt-2 text-sm font-medium text-ok", role: "status" }, "✓ Saved to master sheet ", h("span", { class: "text-white/40", text: "(row " + card.savedRow + ")" })) : null,
@@ -548,17 +552,17 @@
         clear(addMsg);
         if (!r.ok) { addMsg.appendChild(notice("error", r.error)); return; }
         addBtn.disabled = true; addBtn.textContent = "Adding…";
-        api("/api/add-decision-maker", { method: "POST", body: { row: job.firstRow, jobUrl: job.jobUrl, link: r.url }, onBusy: function (n) { clear(addMsg); if (n) addMsg.appendChild(notice("busy", busyText(n))); } })
+        api(cfg.api + "add-decision-maker", { method: "POST", body: { row: job.firstRow, jobUrl: job.jobUrl, link: r.url }, onBusy: function (n) { clear(addMsg); if (n) addMsg.appendChild(notice("busy", busyText(n))); } })
           .then(function (res) {
             st.sticky[res.row + "|" + job.jobUrl] = true;
-            st.notice = { kind: "ok", text: "Added a decision maker for " + job.company + " (verify row " + res.row + ")." };
+            st.notice = { kind: "ok", text: "Added a decision maker for " + job.company + " (" + cfg.rowWord + " row " + res.row + ")." };
             return load();
           }, function (e) { addBtn.disabled = false; addBtn.textContent = "Add"; changedError(e, addMsg); });
       });
       var addForm = job.key ? h("details", { class: "group mt-3" },
         h("summary", { class: "text-sm font-medium text-pink-soft hover:text-white", text: "+ Add another decision maker" }),
         h("div", { class: "mt-2 space-y-2" }, h("div", { class: "flex gap-2" }, addInput, addBtn),
-          h("p", { class: "text-xs text-white/50", text: "Adds a new row to the verify tab for this job, with this LinkedIn in column M. Name, title and note (S/T/U) are filled in Excel." }),
+          h("p", { class: "text-xs text-white/50", text: "Adds a new row to the " + cfg.tabName + " for this job, with this LinkedIn in column M. Name, title and note (S/T/U) are filled in Excel." }),
           addMsg)) : null;
 
       var total = job.total;
@@ -1155,6 +1159,7 @@
 
   if (page === "signals") signalsPage();
   else if (page === "verified") verifiedPage();
+  else if (page === "hr") verifiedPage(HR_CFG);
   else if (page === "candidates") candidatesPage();
   else if (page === "lists") listsPage();
 })();

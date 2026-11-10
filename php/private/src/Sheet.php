@@ -9,6 +9,11 @@ final class Sheet
     public const SIGNALS = 'Signals';
     public const VERIFY = 'Signals to verify decision make';
     public const DECISION_MAKERS = 'Decision Makers';
+    /** HR track: same A:U layout as the verify tab; approvals go to their own tab with the Decision Makers headers. */
+    public const HR = 'Hr signals';
+    public const HR_DECISION_MAKERS = 'HR Decision Makers';
+    /** Tabs matched ignoring case and surrounding spaces (the master's HR tab is called "Hr signals " with a trailing space). */
+    public const LOOSE_NAMES = [self::HR, self::HR_DECISION_MAKERS];
     public const MASTER_FILE_NAME = 'SwooScale Master Data.xlsx';
 
     // Column indexes (0-based) shared by Signals (A:R) and the verify tab (A:U).

@@ -18,6 +18,10 @@
 //   Decision Makers                 : values  A{r}:Q{r}  (row append)
 //                                     format  A{r} | C{r} (Date Verified / Date Found)
 //                                     clear   A{r}:Q{r}  (undo of the app's own last row)
+//   Hr signals                      : values  A{r}:Q{r} | A{r}:R{r} (add another decision maker) | M{r}
+//                                     format  A{r}
+//                                     => never cleared or deleted; S, T, U and N:Q on their own are never written.
+//   HR Decision Makers              : same as Decision Makers
 //   Anything else                   : never written. Row 1 (headers) is never written anywhere.
 declare(strict_types=1);
 
@@ -33,6 +37,15 @@ final class Guard
             'delete' => ['A:Q', 'A:R', 'A:U'],
         ],
         Sheet::DECISION_MAKERS => [
+            'values' => ['A:Q'],
+            'format' => ['A:A', 'C:C'],
+            'clear' => ['A:Q'],
+        ],
+        Sheet::HR => [
+            'values' => ['A:Q', 'A:R', 'M:M'],
+            'format' => ['A:A'],
+        ],
+        Sheet::HR_DECISION_MAKERS => [
             'values' => ['A:Q'],
             'format' => ['A:A', 'C:C'],
             'clear' => ['A:Q'],

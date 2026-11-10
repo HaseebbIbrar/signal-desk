@@ -267,9 +267,24 @@ final class GraphBackend implements WorkbookBackend
         return 'https://graph.microsoft.com/v1.0/drives/' . rawurlencode($this->driveId) . '/items/' . rawurlencode($this->itemId);
     }
 
+    /** @var array<string,string>|null lower-cased trimmed name => real worksheet name */
+    private ?array $sheetNames = null;
+
+    /** The real worksheet name: exact for the fixed tabs, case/space-insensitive for Sheet::LOOSE_NAMES. */
+    public function sheetName(string $sheet): string
+    {
+        if (!in_array($sheet, Sheet::LOOSE_NAMES, true)) return $sheet;
+        if ($this->sheetNames === null) {
+            $this->sheetNames = [];
+            $r = $this->request('GET', '/workbook/worksheets?$select=name');
+            foreach ($r['value'] ?? [] as $w) $this->sheetNames[strtolower(trim((string) ($w['name'] ?? '')))] = (string) $w['name'];
+        }
+        return $this->sheetNames[strtolower(trim($sheet))] ?? throw new UpstreamError("The \"$sheet\" tab was not found in the workbook. Create it (see DEPLOY-20I.md).");
+    }
+
     private function ws(string $sheet): string
     {
-        return "/workbook/worksheets('" . rawurlencode(str_replace("'", "''", $sheet)) . "')";
+        return "/workbook/worksheets('" . rawurlencode(str_replace("'", "''", $this->sheetName($sheet))) . "')";
     }
 
     private function rangePath(string $sheet, string $address): string

@@ -192,6 +192,7 @@ final class App
         match ($path) {
             '/', '/signals' => $path === '/' ? $this->redirect('/signals') : $this->html(Views::shell('signals', $user, $this->config)),
             '/verified' => $this->html(Views::shell('verified', $user, $this->config)),
+            '/hr' => $this->html(Views::shell('hr', $user, $this->config)),
             '/candidates' => $this->html(Views::shell('candidates', $user, $this->config)),
             '/lists' => $this->html(Views::shell('lists', $user, $this->config)),
             default => $this->html(Views::notFound(), 404),
@@ -212,6 +213,7 @@ final class App
                         ($_GET['rejected'] ?? '') === '1',
                     ),
                     'verified' => $this->service()->verifiedView(),
+                    'hr' => $this->service()->verifiedView('hr'),
                     'atlas/search' => $this->requireAtlas()->search(
                         self::str($_GET['title'] ?? ''), self::str($_GET['sub'] ?? ''), self::str($_GET['group'] ?? ''),
                         max(1, min(10000, (int) ($_GET['page'] ?? 1))), ($_GET['all'] ?? '') === '1',
@@ -274,6 +276,11 @@ final class App
                 })(),
                 'approve' => $s->approve($row, $job, $user),
                 'undo-approve' => $s->undoApprove($row, $job, $user['email']),
+                // HR track: same actions on "Hr signals" -> "HR Decision Makers"
+                'hr/linkedin' => $s->saveLinkedIn($row, $job, $body['links'] ?? null, $user['email'], 'hr'),
+                'hr/add-decision-maker' => $s->addDecisionMaker($row, $job, $body['link'] ?? null, $user['email'], 'hr'),
+                'hr/approve' => $s->approve($row, $job, $user, 'hr'),
+                'hr/undo-approve' => $s->undoApprove($row, $job, $user['email'], 'hr'),
                 default => throw new NotFoundError('Unknown API route'),
             };
             $this->json($data);
@@ -407,7 +414,7 @@ final class Views
             . '<div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-pink" aria-hidden="true"></span><span class="font-semibold tracking-tight">Signal Desk</span></div>'
             . '<div class="flex items-center gap-3 text-sm"><span class="hidden text-white/60 sm:inline">' . self::e($user['name']) . '</span>'
             . '<form method="post" action="/logout"><input type="hidden" name="csrf" value="' . self::e($csrf) . '"><button type="submit" class="rounded-lg border border-line px-3 py-1.5 text-white/80 hover:border-pink hover:text-white">Log out</button></form></div></div>'
-            . '<nav class="mx-auto flex max-w-3xl gap-1 px-3 sm:px-4" aria-label="Main">' . $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . $tab('/candidates', 'Candidates', $page === 'candidates') . (Atlas::mode($config) === 'off' ? '' : $tab('/lists', 'Lists', $page === 'lists')) . '</nav></header>'
+            . '<nav class="mx-auto flex max-w-3xl gap-1 px-3 sm:px-4" aria-label="Main">' . $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . $tab('/hr', 'HR signals', $page === 'hr') . $tab('/candidates', 'Candidates', $page === 'candidates') . (Atlas::mode($config) === 'off' ? '' : $tab('/lists', 'Lists', $page === 'lists')) . '</nav></header>'
             . '<main id="app" class="mx-auto max-w-3xl px-3 pb-16 pt-4 sm:px-4"><p class="flex items-center gap-2 text-sm text-white/70"><span class="sd-spinner"></span> Reading the master sheet…</p></main>'
             . '</div><script src="' . self::e(App::asset('app.js')) . '" defer></script></body></html>';
     }

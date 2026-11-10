@@ -348,12 +348,37 @@ Below the Atlas results, **In the market (Prospeo)** finds people outside Atlas 
   - nothing else about candidates
 - **Audit log:** each Atlas call is logged as its method, endpoint pattern and status, with no ids and no names.
 
+## HR signals (second decision-maker track)
+
+The **HR signals** page (menu: HR signals) works exactly like **Verified**, but on its own two tabs:
+
+| | Verified | HR signals |
+|---|---|---|
+| Cards come from | Signals to verify decision make | **Hr signals** (same A:U columns) |
+| JP edits | column **M** (LinkedIn) | column **M** (LinkedIn) |
+| + Add another decision maker | appends a row to the verify tab | appends a row to **Hr signals** (A:R copied from the job's first row) |
+| ✓ Approve appends one row to | Decision Makers | **HR Decision Makers** |
+
+**One-time setup in the master:** create a tab named **HR Decision Makers** and paste this header row into row 1, A1:Q1 (exactly the Decision Makers headers):
+
+```
+Date Verified	Verified By	Date Found	Company	Domain	Job Title	Role Group	Role Sub-Group	Company Type	Location	Job URL	Decision Maker LinkedIn	Decision Maker Name	Decision Maker Title	Status	Source Row	Notes
+```
+
+(Copy the line above and paste it into A1: the tabs split it into the 17 columns.) Until the tab exists, the HR signals page still shows the cards with a warning, and **Approve** refuses with a clear message. Nothing else is written.
+
+- The tab names are matched without minding capitals or extra spaces, so the existing tab "Hr signals " (with a trailing space) works as it is.
+- On the **Hr signals** tab the app only ever writes column **M** and appends rows; it never clears or deletes rows, and never writes S, T or U (fill name, title and note in Excel, as on the verify tab).
+- Approved rows get Status **Ready to push** and **Source Row** = the row number on the Hr signals tab. The same person is never sent twice for the same job, and **Undo** works only for the app's own last HR approval.
+
 ## What the app writes
 
 | Tab | Allowed writes |
 |---|---|
 | Signals | **never** |
 | Signals to verify decision make | (a) **Verify**: append a row; (b) **Add another decision maker**: append a row copying A:R from the job's first verify row, with the new link in M and N:Q empty; both A:R if R1 = "Role Sub-Group", else A:Q plus a warning. (c) Column **M** on an identified row. (d) **Untick**: remove the row only when it's the job's **only** verify row and its **M, S, T and U** are empty. **Never S, T or U.** |
+| Hr signals | column **M** on an identified row; **Add another decision maker** appends a row (A:R from the job's first row, new link in M). Never cleared, deleted, or written in S, T or U. |
+| HR Decision Makers | as Decision Makers (one A:Q row per approved HR decision maker; undo of the app's own last row) |
 | Decision Makers | append one row (A:Q) per approved decision maker, after checking the header row; the same person is never sent twice for the same job; undo only the row the app just added, while it's still last and unchanged |
 
 **Several decision makers per job:** each person is a separate verify-tab row with the same Job URL, and is reviewed, approved and sent separately. Every action on a card sends its row number **and** Job URL. If rows have moved in Excel since the page loaded, the app refuses with "The sheet changed, please refresh" instead of writing to the wrong row.
@@ -375,6 +400,7 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 | "Sheet busy, retrying…" | The workbook is locked (often the nightly job). The app retries by itself. |
 | `/health.php` shows a WARN for "… over HTTP" | The server couldn't reach itself (no response, timeout) or got an unexpected status. Open the URL shown in a browser: 403 or 404 means it's fine, while showing the file means it's reachable. |
 | `/health.php` shows a FAIL for "… over HTTP" | `.htaccess` isn't being applied. Make sure both hidden `.htaccess` files were uploaded, and ask 20i whether `AllowOverride` is enabled. Until then, use layout A. |
+| HR signals: "The HR Decision Makers tab is empty" or "tab was not found" | Create the **HR Decision Makers** tab with the header row (see HR signals). |
 | "Atlas refused the API key" | Check `ATLAS_API_KEY` in `config.php`, or create a new key in Atlas (Settings → Integrations → API Keys). |
 | "Atlas pools found" WARN: "not visible to this key" | The list is private to another user. Make it public in Atlas, or use that user's key. |
 | Badges say "title index not built yet" / "building…" | Set up the cron job (Candidate Desk → Title index) or click **Lists → Rebuild index** and keep the page open until it finishes. |

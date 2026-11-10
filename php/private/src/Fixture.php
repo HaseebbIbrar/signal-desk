@@ -107,6 +107,15 @@ final class Fixture
             ExcelDate::isoToSerial(self::isoDaysAgo($today, 1)), 'Jonathan Perkins', $sent[0], $sent[2], $sent[3], $sent[4], $sent[6], $sent[17],
             $sent[7], $sent[8], $sent[11], $sent[12], $sent[19], $sent[20], 'Ready to push', 6, $sent[18],
         ]];
-        return [Sheet::SIGNALS => $signals, Sheet::VERIFY => $verify, Sheet::DECISION_MAKERS => $dm];
+        // HR track: "Hr signals" (same A:U layout) with a few jobs, and an empty "HR Decision Makers" tab (headers only).
+        $hr = [array_merge(self::SIGNALS_HEADER, self::VERIFY_EXTRA_HEADER)];
+        foreach ([[6, '', '', '', ''], [7, '', 'Ask for the HR business partner', '', ''],
+                  [8, 'https://www.linkedin.com/in/example-hr-director', '', 'Kim Example', 'HR Director'], [9, '', '', '', '']] as [$i, $m, $s, $t, $u]) {
+            $row = $dataRows[$i % count($dataRows)];
+            $row[Sheet::DM_LINKEDIN] = $m;
+            $hr[] = array_merge($row, [$s, $t, $u]);
+        }
+        return [Sheet::SIGNALS => $signals, Sheet::VERIFY => $verify, Sheet::DECISION_MAKERS => $dm,
+            Sheet::HR => $hr, Sheet::HR_DECISION_MAKERS => [Sheet::DM_TAB_HEADERS]];
     }
 }
