@@ -92,7 +92,10 @@ test('Atlas guard: GET-only allowlist; create/update/delete and off-list endpoin
     foreach (['POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as $m) throws(fn () => AtlasGuard::assert($m, '/api/v1/lists'), ForbiddenWriteError::class, 'read-only');
     eq('/api/v1/people/search', AtlasGuard::assert('GET', '/api/v1/people/search'), 'exact LinkedIn lookup ("Already in Atlas")');
     throws(fn () => AtlasGuard::assert('POST', '/api/v1/people/search'), ForbiddenWriteError::class, 'read-only');
-    foreach (['/api/v1/people', '/api/v1/people/search/all', '/api/v1/projects', "/api/v1/lists/$id/members/remove", '/api/v1/lists/../people', "/api/v1/people/$id/enrich", '/api/v1/lists?x=1'] as $p) {
+    foreach (['/api/v1/projects', '/api/v1/opportunities', '/api/v1/placements'] as $p) eq($p, AtlasGuard::assert('GET', $p), 'Outreach business numbers (read-only)');
+    eq('/api/v1/opportunities/{id}', AtlasGuard::assert('GET', "/api/v1/opportunities/$id"));
+    throws(fn () => AtlasGuard::assert('POST', '/api/v1/opportunities'), ForbiddenWriteError::class, 'read-only');
+    foreach (['/api/v1/people', '/api/v1/people/search/all', '/api/v1/projects/x/candidates', "/api/v1/lists/$id/members/remove", '/api/v1/lists/../people', "/api/v1/people/$id/enrich", '/api/v1/lists?x=1'] as $p) {
         throws(fn () => AtlasGuard::assert('GET', $p), ForbiddenWriteError::class, 'allowlist');
     }
     $calls = 0;

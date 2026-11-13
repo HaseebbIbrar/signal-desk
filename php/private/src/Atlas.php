@@ -33,6 +33,11 @@ final class AtlasGuard
         '/api/v1/files' => '#^/api/v1/files$#',
         '/api/v1/files/{id}/download' => '#^/api/v1/files/' . self::UUID . '/download$#',
         '/api/v1/users' => '#^/api/v1/users$#',
+        // Outreach "From reach to business" (approved 2026-11-13): new jobs, deals, new clients. GET only.
+        '/api/v1/projects' => '#^/api/v1/projects$#',
+        '/api/v1/opportunities' => '#^/api/v1/opportunities$#',
+        '/api/v1/opportunities/{id}' => '#^/api/v1/opportunities/' . self::UUID . '$#',
+        '/api/v1/placements' => '#^/api/v1/placements$#',
     ];
 
     /** @return string the endpoint pattern (ids replaced by {id}), safe for logs */

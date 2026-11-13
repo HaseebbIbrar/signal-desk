@@ -174,6 +174,18 @@ final class LinkedIn
         return array_values(array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', (string) $value) ?: []), fn ($s) => $s !== ''));
     }
 
+    /**
+     * One person's profile key for matching across systems (lemlist, Prospeo, the workbook): "in/<slug>" lower-cased,
+     * URL-decoded, ignoring scheme, www/country subdomain, query and trailing slash. null when it isn't a /in/ profile.
+     */
+    public static function profileKey(mixed $url): ?string
+    {
+        $s = trim((string) $url);
+        if ($s === '' || !preg_match('~(?:^|//|\.|^)(?:[a-z]{2,3}\.)?linkedin\.com/in/([^/?#\s]+)~i', $s, $m)) return null;
+        $slug = rtrim(mb_strtolower(rawurldecode($m[1]), 'UTF-8'), '/');
+        return $slug === '' ? null : 'in/' . $slug;
+    }
+
     /** Key used for duplicate protection: each link normalised when valid, sorted, joined. */
     public static function key(mixed $cell): string
     {

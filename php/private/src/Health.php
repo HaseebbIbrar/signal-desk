@@ -10,7 +10,71 @@ final class Health
     /** @return array<int,array{0:string,1:string,2:string}> [check, status OK|WARN|FAIL, detail] */
     public static function checks(array $config, string $privateDir, string $layout, string $origin): array
     {
-        return array_merge(self::baseChecks($config, $privateDir, $layout, $origin), self::atlasChecks($config, $privateDir), self::aiChecks($config), self::prospeoChecks($config));
+        return array_merge(self::baseChecks($config, $privateDir, $layout, $origin), self::atlasChecks($config, $privateDir), self::aiChecks($config), self::prospeoChecks($config), self::lemlistChecks($config));
+    }
+
+    /**
+     * lemlist: key set and reachable, plan + calls API, webhook registered (not disabled) + last event, last sync, leads/tasks synced,
+     * who may send. Never shows the key or the webhook secret.
+     */
+    public static function lemlistChecks(array $config, ?LemlistClient $client = null, ?LemlistStore $store = null, ?int $now = null): array
+    {
+        $now ??= time();
+        $mode = Lemlist::mode($config);
+        if ($mode === 'off') return [['lemlist (Outreach & Calls)', 'WARN', 'off: set LEMLIST_API_KEY in config.php to enable it']];
+        $rows = [['lemlist (Outreach & Calls)', 'OK', $mode === 'mock' ? 'mock (fake data)' : 'live']];
+        if ($mode === 'lemlist') $rows[] = ['LEMLIST_API_KEY', 'OK', 'set'];
+        $rows[] = ['LEMLIST_WEBHOOK_SECRET', ($config['LEMLIST_WEBHOOK_SECRET'] ?? '') !== '' ? 'OK' : 'WARN', ($config['LEMLIST_WEBHOOK_SECRET'] ?? '') !== '' ? 'set' : 'missing: the webhook will refuse all events'];
+        try {
+            $store ??= Lemlist::store($config);
+            $rows[] = ['lemlist storage (SQLite)', 'OK', 'storage/lemlist.sqlite'];
+        } catch (\Throwable $e) {
+            $rows[] = ['lemlist storage (SQLite)', 'FAIL', $e->getMessage()];
+            $store = null;
+        }
+        $team = [];
+        try {
+            $client ??= Lemlist::client($config);
+            $t = $client->get('/team', ['version' => 'v2']);
+            $team = $t['users'] ?? [];
+            $rows[] = ['lemlist API reachable', 'OK', 'team "' . ($t['name'] ?? '?') . '", ' . count($team) . ' user(s)'];
+            try {
+                $plan = (string) ($client->get('/user/channels')['plan'] ?? '');
+            } catch (\Throwable) {
+                $plan = '';
+            }
+            try {
+                $client->get('/call-statuses');
+                $rows[] = ['lemlist plan / calls API', 'OK', ($plan !== '' ? "plan $plan, " : '') . 'calls API available'];
+            } catch (AppError $e) {
+                $rows[] = ['lemlist plan / calls API', 'WARN', ($plan !== '' ? "plan $plan: " : '') . ($e->errCode === 'LEMLIST_PLAN' ? 'Calls API needs Email Pro+ (the call logger stays off; manual tasks and the inbox still work)' : $e->getMessage())];
+            }
+            $target = rtrim((string) ($config['APP_ORIGIN'] ?? ''), '/') . '/hooks/lemlist';
+            $hook = null;
+            foreach ($t['hooks'] ?? [] as $h) if (rtrim((string) ($h['targetUrl'] ?? ''), '/') === $target) $hook = $h;
+            if (!$hook) $rows[] = ['lemlist webhook', 'WARN', "not registered for $target: run bin/lemlist-webhook.php --register"];
+            elseif (!empty($hook['disabled'])) $rows[] = ['lemlist webhook', 'FAIL', 'registered but DISABLED by lemlist (' . ($hook['disabledReason'] ?? '?') . ', HTTP ' . ($hook['lastErrorStatus'] ?? '?') . '): delete and register it again'];
+            else $rows[] = ['lemlist webhook', 'OK', "registered for $target"];
+        } catch (\Throwable $e) {
+            $rows[] = ['lemlist API reachable', 'FAIL', $e->getMessage()];
+        }
+        if ($store) {
+            $last = (int) $store->meta('last_event_at', 0);
+            $rows[] = ['lemlist last webhook event', $last && $now - $last <= 86400 ? 'OK' : 'WARN', $last ? gmdate('Y-m-d H:i', $last) . ' UTC' . ($now - $last > 86400 ? ': nothing in 24 h' : '') : 'none received yet'];
+            $sync = (int) $store->meta('last_sync_at', 0);
+            $rows[] = ['lemlist last sync', $sync && $now - $sync <= 3600 ? 'OK' : 'WARN', $sync ? gmdate('Y-m-d H:i', $sync) . ' UTC' . ($now - $sync > 3600 ? ': older than 1 h, check the cron job (bin/lemlist-sync.php)' : '') : 'never: run bin/lemlist-sync.php (cron)'];
+            $rows[] = ['lemlist data synced', 'OK', $store->one('SELECT COUNT(*) FROM campaigns') . ' running campaign(s), ' . $store->one('SELECT COUNT(*) FROM leads') . ' leads ('
+                . $store->one('SELECT COUNT(*) FROM leads WHERE signal_track IS NOT NULL') . ' linked to approved DMs), ' . $store->one("SELECT COUNT(*) FROM tasks WHERE status IN ('due','upcoming','paused')") . ' open tasks'];
+        }
+        $senders = [];
+        foreach (array_filter(array_map('trim', explode(',', (string) ($config['LEMLIST_SENDER_ALLOWED'] ?? '')))) as $e) {
+            $s = LemlistSender::for($config, $e, $team);
+            if ($s) $senders[] = "$e → " . $s['name'];
+        }
+        $shared = (string) ($config['LEMLIST_SHARED_SENDER'] ?? '');
+        $known = !$team || $shared === '' || in_array($shared, array_column($team, 'userId'), true);
+        $rows[] = ['lemlist users mapped', $senders && $known ? 'OK' : 'WARN', $senders ? implode('; ', $senders) . '; everyone else: view only' . ($known ? '' : " (LEMLIST_SHARED_SENDER $shared is not in the lemlist team)") : 'nobody can send yet: set LEMLIST_SHARED_SENDER and LEMLIST_SENDER_ALLOWED'];
+        return $rows;
     }
 
     /** "In the market" (Prospeo): mode, key set (never shown), reachable via the free account-information, credits left. */

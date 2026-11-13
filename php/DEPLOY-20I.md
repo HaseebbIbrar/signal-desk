@@ -371,6 +371,42 @@ Date Verified	Verified By	Date Found	Company	Domain	Job Title	Role Group	Role Su
 - On the **Hr signals** tab the app only ever writes column **M** and appends rows; it never clears or deletes rows, and never writes S, T or U (fill name, title and note in Excel, as on the verify tab).
 - Approved rows get Status **Ready to push** and **Source Row** = the row number on the Hr signals tab. The same person is never sent twice for the same job, and **Undo** works only for the app's own last HR approval.
 
+## lemlist (Outreach & Calls) — Phase 1: data sync and webhook
+
+Signal Desk reads your lemlist campaigns into its own database, **storage/lemlist.sqlite**, so the Outreach and Calls tabs (next phases) are fast. Phase 1 adds no new screen yet; check it on `/health.php`.
+
+**1. config.php**
+```php
+'LEMLIST_BACKEND' => '',                          // '' = on when the key is set; 'mock' = fake data (refused in production); 'off'
+'LEMLIST_API_KEY' => '…',                         // lemlist → Settings → Integrations → Generate a new API key (Jonathan's account)
+'LEMLIST_WEBHOOK_SECRET' => '…',                  // make up a long random string, 32+ characters; never share it
+'LEMLIST_SHARED_SENDER' => 'usr_ppJJtGkzzXRXK7sxi', // Jonathan Perkins: everyone allowed below sends / logs calls as him
+'LEMLIST_SENDER_ALLOWED' => 'jonathan@…, haseeb@…', // the Signal Desk LOGIN emails allowed to send; everyone else can only view
+'LEMLIST_USER_MAP' => '',                         // later, for separate lemlist users
+'LEMLIST_ATTRIBUTION' => 'first_positive',        // or all_touches
+```
+Every send and call log will say **"Sending as Jonathan Perkins (jonathan@swooscale.com)"**, and the audit log records the real Signal Desk user behind each action.
+
+**2. Second cron line** (My20i → Scheduled Tasks), every 15 minutes, next to the Atlas one:
+```
+php /home/sites/11a/6/6202f25165/signal-desk-private/bin/lemlist-sync.php
+```
+Each run lasts at most 4 minutes and carries on where it stopped. It reads the running campaigns (steps, leads, stats), new activities, open tasks and call statuses (about 8 requests a second; lemlist allows 20 per 2 s), then links each lead to its approved decision maker in **Decision Makers** / **HR Decision Makers** (read-only, by LinkedIn profile) and its Atlas pool count. Data older than 12 months is removed once a day.
+
+**3. Register the webhook once** (needs Jonathan's "Edit integrations" permission). Over SSH on 20i, or on your own computer with the live config.php:
+```
+php bin/lemlist-webhook.php --register
+php bin/lemlist-webhook.php --status
+```
+It registers **https://signals.swooscale.com/hooks/lemlist** for all events, with your secret. lemlist sends the secret back in every event; Signal Desk refuses any event without it. If lemlist ever disables the webhook (health shows FAIL), run `--status`, then `--delete=<id>` and `--register` again.
+
+**What it reads and keeps:**
+- Lead names, companies, titles, LinkedIn, **emails and phones** are stored only in `storage/lemlist.sqlite` (outside the web root), never in logs. Webhook events are kept as ids and types only.
+- The app can only *read* from lemlist, except for the writes the Calls tab will use: log a call, complete / reschedule / skip a task, reply by email or LinkedIn, set an inbox label, create our 4 labels (Interested, Meeting, Not interested, Out of office), and the webhook setup above. Anything else (deleting leads, changing campaigns, bulk sends) is refused in code before any request.
+- **Calls API:** lemlist's calls API needs **Email Pro or above**. `/health.php` shows the plan; without it, the call logger will be replaced by "Calls API needs Email Pro+" and manual tasks and the inbox keep working.
+
+**/health.php rows:** key set and reachable · plan / calls API · webhook registered (FAIL if lemlist disabled it) · last webhook event (WARN after 24 h without one) · last sync (WARN after 1 h) · campaigns, leads (linked to DMs) and open tasks synced · who may send.
+
 ## What the app writes
 
 | Tab | Allowed writes |
@@ -401,6 +437,9 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 | `/health.php` shows a WARN for "… over HTTP" | The server couldn't reach itself (no response, timeout) or got an unexpected status. Open the URL shown in a browser: 403 or 404 means it's fine, while showing the file means it's reachable. |
 | `/health.php` shows a FAIL for "… over HTTP" | `.htaccess` isn't being applied. Make sure both hidden `.htaccess` files were uploaded, and ask 20i whether `AllowOverride` is enabled. Until then, use layout A. |
 | HR signals: "The HR Decision Makers tab is empty" or "tab was not found" | Create the **HR Decision Makers** tab with the header row (see HR signals). |
+| lemlist: "PHP extension pdo_sqlite is missing" | Ask 20i to enable **pdo_sqlite** for your PHP version (it is standard). |
+| lemlist webhook FAIL "DISABLED" | lemlist stopped sending after a failed delivery: `bin/lemlist-webhook.php --status`, `--delete=<id>`, `--register`. |
+| lemlist "last webhook event" WARN | Nothing arrived for 24 h: check the webhook row; quiet weekends are normal. |
 | "Atlas refused the API key" | Check `ATLAS_API_KEY` in `config.php`, or create a new key in Atlas (Settings → Integrations → API Keys). |
 | "Atlas pools found" WARN: "not visible to this key" | The list is private to another user. Make it public in Atlas, or use that user's key. |
 | Badges say "title index not built yet" / "building…" | Set up the cron job (Candidate Desk → Title index) or click **Lists → Rebuild index** and keep the page open until it finishes. |

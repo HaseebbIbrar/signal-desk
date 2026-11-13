@@ -17,6 +17,7 @@ final class Config
         'ATLAS_BACKEND', 'ATLAS_API_KEY', 'ATLAS_BASE_URL', 'ATLAS_PROFILE_URL',
         'ANTHROPIC_BACKEND', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_MONTHLY_LIMIT_EUR', 'ANTHROPIC_USD_TO_EUR',
         'PROSPEO_BACKEND', 'PROSPEO_API_KEY', 'PROSPEO_DAILY_CREDIT_CAP',
+        'LEMLIST_BACKEND', 'LEMLIST_API_KEY', 'LEMLIST_WEBHOOK_SECRET', 'LEMLIST_USER_MAP', 'LEMLIST_SHARED_SENDER', 'LEMLIST_SENDER_ALLOWED', 'LEMLIST_ATTRIBUTION',
     ];
 
     /** @return array<string,string> validated settings */
@@ -72,6 +73,24 @@ final class Config
         if ($c['PROSPEO_DAILY_CREDIT_CAP'] !== '' && (!ctype_digit($c['PROSPEO_DAILY_CREDIT_CAP']) || (int) $c['PROSPEO_DAILY_CREDIT_CAP'] > 100000)) {
             throw new ConfigError('PROSPEO_DAILY_CREDIT_CAP must be a whole number (e.g. 200).');
         }
+        foreach (['LEMLIST_BACKEND', 'LEMLIST_API_KEY', 'LEMLIST_WEBHOOK_SECRET', 'LEMLIST_USER_MAP', 'LEMLIST_SHARED_SENDER', 'LEMLIST_SENDER_ALLOWED', 'LEMLIST_ATTRIBUTION'] as $k) $c[$k] = trim((string) ($c[$k] ?? ''));
+        $c['LEMLIST_BACKEND'] = strtolower($c['LEMLIST_BACKEND']);
+        if (!in_array($c['LEMLIST_BACKEND'], ['', 'lemlist', 'mock', 'off'], true)) throw new ConfigError('LEMLIST_BACKEND must be lemlist, mock or off.');
+        if ($c['LEMLIST_BACKEND'] === 'mock' && $c['APP_ENV'] === 'production') throw new ConfigError('LEMLIST_BACKEND=mock is not allowed when APP_ENV=production.');
+        if ($c['LEMLIST_WEBHOOK_SECRET'] !== '' && strlen($c['LEMLIST_WEBHOOK_SECRET']) < 24) throw new ConfigError('LEMLIST_WEBHOOK_SECRET must be at least 24 characters (use a long random string).');
+        if ($c['LEMLIST_SHARED_SENDER'] !== '' && !preg_match('/^usr_[A-Za-z0-9]{6,40}$/', $c['LEMLIST_SHARED_SENDER'])) throw new ConfigError('LEMLIST_SHARED_SENDER must be a lemlist user id like usr_…');
+        if ($c['LEMLIST_USER_MAP'] !== '') {
+            $map = json_decode($c['LEMLIST_USER_MAP'], true);
+            if (!is_array($map) || array_is_list($map)) throw new ConfigError('LEMLIST_USER_MAP must be a JSON object: {"login@email": {"userId": "usr_…", "email": "…", "mailboxId": "usm_…"}}.');
+            foreach ($map as $login => $m) {
+                if (!is_array($m) || !preg_match('/^usr_[A-Za-z0-9]{6,40}$/', (string) ($m['userId'] ?? ''))) throw new ConfigError("LEMLIST_USER_MAP: \"$login\" needs a userId like usr_….");
+            }
+        }
+        foreach (array_filter(array_map('trim', explode(',', $c['LEMLIST_SENDER_ALLOWED']))) as $e) {
+            if (!filter_var($e, FILTER_VALIDATE_EMAIL)) throw new ConfigError("LEMLIST_SENDER_ALLOWED: \"$e\" is not an email address.");
+        }
+        if (!in_array($c['LEMLIST_ATTRIBUTION'], ['', 'first_positive', 'all_touches'], true)) throw new ConfigError('LEMLIST_ATTRIBUTION must be first_positive or all_touches.');
+        if ($c['LEMLIST_ATTRIBUTION'] === '') $c['LEMLIST_ATTRIBUTION'] = 'first_positive';
         if ($c['APP_ENV'] === 'production' && $c['APP_ORIGIN'] === '') {
             throw new ConfigError('APP_ORIGIN must be set in production (e.g. https://signals.swooscale.com).');
         }

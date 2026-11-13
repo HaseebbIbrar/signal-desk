@@ -57,4 +57,19 @@ return [
     'PROSPEO_BACKEND' => '',
     'PROSPEO_API_KEY' => '',
     'PROSPEO_DAILY_CREDIT_CAP' => '200',
+
+    // lemlist (Outreach and Calls tabs). Key: lemlist -> Settings -> Integrations -> Generate a new API key.
+    // LEMLIST_BACKEND: '' = on when LEMLIST_API_KEY is set; 'mock' = fake data (refused in production); 'off'.
+    // LEMLIST_WEBHOOK_SECRET: a long random string (32+ characters) you make up; register it once with bin/lemlist-webhook.php --register.
+    // LEMLIST_SHARED_SENDER: the lemlist user every allowed Signal Desk user sends/logs calls as (usr_…).
+    // LEMLIST_SENDER_ALLOWED: comma-separated Signal Desk login emails allowed to send; everyone else can only view.
+    // LEMLIST_USER_MAP: later, for separate lemlist users: {"login@email": {"userId": "usr_…", "email": "…", "mailboxId": "usm_…"}}
+    // LEMLIST_ATTRIBUTION: first_positive (credit the channel of the first positive response) or all_touches.
+    'LEMLIST_BACKEND' => '',
+    'LEMLIST_API_KEY' => '',
+    'LEMLIST_WEBHOOK_SECRET' => '',
+    'LEMLIST_SHARED_SENDER' => 'usr_ppJJtGkzzXRXK7sxi',
+    'LEMLIST_SENDER_ALLOWED' => '',
+    'LEMLIST_USER_MAP' => '',
+    'LEMLIST_ATTRIBUTION' => 'first_positive',
 ];

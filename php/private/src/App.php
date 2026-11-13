@@ -146,9 +146,13 @@ final class App
             header('Location: https://' . ($_SERVER['HTTP_HOST'] ?? '') . ($_SERVER['REQUEST_URI'] ?? '/'), true, 301);
             return;
         }
-        Auth::startSession($this->config['STORAGE_DIR'], $https);
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
         $path = '/' . trim((string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/');
+        if ($path === '/hooks/lemlist') { // lemlist webhook: no session, no login; the shared secret is the only key
+            $this->lemlistHook($method);
+            return;
+        }
+        Auth::startSession($this->config['STORAGE_DIR'], $https);
         $auth = $this->auth();
         $user = $auth->user();
 
@@ -327,6 +331,19 @@ final class App
         $client = Prospeo::client($this->config) ?? throw new AppError(503, 'PROSPEO_OFF', 'Prospeo is not configured (PROSPEO_API_KEY in config.php).');
         return $this->market = new MarketSearch($client, Prospeo::ledger($this->config), $this->config['STORAGE_DIR'], $this->atlas(),
             $this->atlas()?->dictionary() ?? JdDictionary::default());
+    }
+
+    private function lemlistHook(string $method): void
+    {
+        try {
+            $raw = (string) file_get_contents('php://input', false, null, 0, LemlistWebhook::MAX_BODY + 1);
+            $store = Lemlist::mode($this->config) === 'off' ? null : Lemlist::store($this->config);
+            [$status, $body] = LemlistWebhook::handle($this->config, $method, $raw, $store);
+        } catch (\Throwable $e) {
+            Audit::event('lemlist_hook_error', ['where' => basename($e->getFile()) . ':' . $e->getLine()]);
+            [$status, $body] = [500, ['error' => 'Server error']];
+        }
+        $this->json($body, $status);
     }
 
     /** Read a signal's job page for JD matching; anything blocked or empty asks the user to paste the JD. */
