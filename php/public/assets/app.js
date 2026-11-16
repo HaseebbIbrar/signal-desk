@@ -1035,6 +1035,32 @@
   // Layout and look follow the approved mockup (signal-desk-design/outreach-mockup.dc.html). No inline styles (CSP):
   // colours come from classes that set --c (sd-c-*, sd-st-*, sd-f-*), widths through el.style.width (the "width" key of h()).
   // The selection lives in the URL (?c=ids&p=7) and is remembered per user.
+  // "Live · last lemlist event 14 s ago" in the top bar (#sd-live). The server fills data-at; the Outreach page updates it.
+  function liveStatus(eventAt, syncedAt) {
+    var el = document.getElementById("sd-live");
+    if (!el) return;
+    if (eventAt !== undefined) el.setAttribute("data-at", eventAt || "");
+    if (syncedAt !== undefined) el.setAttribute("data-synced", syncedAt || "");
+    var at = el.getAttribute("data-at");
+    var t = !at ? 0 : /^\d+$/.test(at) ? Number(at) * 1000 : Date.parse(at);
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    var live = t && s < 86400;
+    var txt = !live ? "No lemlist event in 24 h" : "Live · last lemlist event " + (s < 60 ? s + " s" : s < 3600 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h") + " ago";
+    el.classList.toggle("sd-live-off", !live);
+    el.firstChild.className = "sd-dot " + (live ? "sd-c-live" : "sd-c-muted");
+    el.lastChild.textContent = txt;
+    var sy = el.getAttribute("data-synced");
+    el.title = "lemlist webhook events arrive live; the full sync runs every 15 minutes" + (sy ? " (last sync " + new Date(/^\d+$/.test(sy) ? Number(sy) * 1000 : Date.parse(sy)).toLocaleString("en-GB") + ")" : "");
+  }
+  function callsPage() {
+    clear(app);
+    app.appendChild(h("div", { class: "sd-o sd-o-stack" },
+      h("div", { class: "sd-o-titlebar" }, h("h1", { class: "sd-o-h1", text: "SDR desk" })),
+      h("section", { class: "sd-card sd-o-pad sd-o-stack-s sd-c-call sd-o-topline", "aria-label": "Calls" },
+        h("h2", { class: "sd-o-h2", text: "Calls: coming soon" }),
+        h("span", { class: "sd-muted sd-o-text", text: "Call tasks, manual tasks and the lemlist inbox arrive here in the next phase. The number on the tab is today's open call and manual tasks in lemlist." }),
+        h("div", { class: "sd-o-wrap" }, h("a", { href: "/outreach", class: "sd-btn sd-btn-link", text: "Go to Outreach" })))));
+  }
   var OUTREACH_STATUS_LABEL = { "Replied": "Replied: needs outcome" };
   function statusSlug(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
   function outreachPage() {
@@ -1056,7 +1082,7 @@
     clear(app);
     var top = h("div", { class: "sd-o-stack" });
     var body = h("div", { class: "sd-o-stack" });
-    var boardBox = h("section", { class: "sd-card sd-o-pad sd-o-stack", "aria-label": "Live lead board" });
+    var boardBox = h("section", { class: "sd-card sd-o-board-card", "aria-label": "Live lead board" });
     var panel = h("div");
     app.appendChild(h("div", { class: "sd-o sd-o-stack" }, top, body, boardBox, panel));
 
@@ -1123,7 +1149,11 @@
       if (on !== null) a["aria-pressed"] = on ? "true" : "false";
       return h("button", a);
     }
-    function head(title, sub, tag) { return h("div", { class: "sd-o-head" }, h(tag || "h2", { class: "sd-o-h2", text: title }), sub ? h("span", { class: "sd-muted sd-o-small", text: sub }) : null); }
+    // section heading as in the mockup: h2 (18 px, or 20 px with big) and a muted sub-line on the right (12 or 13 px)
+    function head(title, sub, subSize, big) {
+      return h("div", { class: "sd-o-head" }, h("h2", { class: "sd-o-h2" + (big ? " sd-o-h2-lg" : ""), text: title }),
+        sub ? h("span", { class: "sd-muted " + (subSize === 13 ? "sd-o-small13" : "sd-o-small"), text: sub }) : null);
+    }
 
     // ---------------------------------------------------------- 1. header: title, live status, period, campaigns, compare
     function renderTop() {
@@ -1131,12 +1161,9 @@
       var d = st.data;
       var n = d ? d.campaigns.length : 0;
       var label = !d ? "Campaigns: …" : d.selection.all ? "Campaigns: All running (" + n + ")" : "Campaigns: " + d.selection.ids.length + " of " + n;
-      var ev = d && d.dashboard.eventAt;
-      var live = ev && Date.now() - ts(ev) < 86400000;
+      if (d) liveStatus(d.dashboard.eventAt, d.dashboard.syncedAt);
       top.appendChild(h("div", { class: "sd-o-titlebar" },
-        h("div", { class: "sd-o-stack-xs" }, h("h1", { class: "sd-o-h1", text: "Outreach dashboard" }),
-          d ? h("span", { class: "sd-live" + (live ? "" : " sd-live-off") }, dot(live ? "sd-c-live" : "sd-c-muted"),
-            (live ? "Live · last lemlist event " + ago(ev) : "No lemlist event in 24 h") + " · synced " + ago(d.dashboard.syncedAt) + " · refreshes every minute") : null),
+        h("h1", { class: "sd-o-h1", text: "Outreach dashboard" }),
         h("div", { class: "sd-o-actions" },
           h("div", { class: "sd-o-group", role: "group", "aria-label": "Period" }, PERIODS.map(function (x) { return btn(x[1], st.p === x[0], function () { st.p = x[0]; load(); }); })),
           h("button", { type: "button", class: "sd-btn" + (st.picker ? " sd-btn-on" : ""), "aria-expanded": st.picker ? "true" : "false", onclick: function () { st.picker = !st.picker; st.draft = null; renderTop(); }, text: label + " ▾" }),
@@ -1204,11 +1231,10 @@
 
     // ---------------------------------------------------------- sections 2-6
     function tile(label, t, sub, color) {
-      var delta = t.delta === 0 ? "same as previous period" : (t.delta > 0 ? "▲ " : "▼ ") + fmt(Math.abs(t.delta)) + (t.pct !== null ? " (" + (t.pct > 0 ? "+" : "") + t.pct + "%)" : "") + " vs previous";
-      return h("div", { class: "sd-card sd-o-tile sd-c-" + color },
+      var delta = t.delta === 0 ? "Same as the previous period" : (t.delta > 0 ? "+" : "−") + fmt(Math.abs(t.delta)) + (t.pct !== null ? " (" + (t.pct > 0 ? "+" : "") + t.pct + "%)" : "") + " vs the previous period";
+      return h("div", { class: "sd-card sd-o-tile sd-c-" + color, title: delta + " (" + fmt(t.prev) + " before)" },
         h("span", { class: "sd-muted sd-o-tile-label", text: label }), h("span", { class: "sd-o-tile-value", text: fmt(t.value) }),
-        h("span", { class: "sd-muted sd-o-small", text: sub }),
-        h("span", { class: "sd-o-delta " + (t.delta > 0 ? "sd-up" : t.delta < 0 ? "sd-down" : "sd-muted"), text: delta }));
+        h("span", { class: "sd-muted sd-o-small", text: sub }));
     }
     function channelCard(def, c) {
       var extra = fmt(c.extra.value) + (c.extra.pct !== null ? " (" + c.extra.pct + "%)" : "");
@@ -1216,7 +1242,7 @@
       var rows = [[def.act, def.k === "email" ? c.delivered : c.actions], [def.resp, c.responses], ["Leads reached", c.reached], [c.extra.label, null, extra], ["Meetings from it", c.meetings]];
       return h("div", { class: "sd-card sd-o-channel sd-c-" + def.k },
         h("div", { class: "sd-o-between" }, h("span", { class: "sd-o-channel-name", text: def.name }), pill(def.short, "sd-pill-fill sd-c-" + def.k)),
-        h("div", { class: "sd-o-baseline" }, h("span", { class: "sd-o-rate", text: pct(c.rate) }), h("span", { class: "sd-muted sd-o-small", text: def.rate })),
+        h("div", { class: "sd-o-baseline" }, h("span", { class: "sd-o-rate", text: pct(c.rate) }), h("span", { class: "sd-muted sd-o-small13", text: def.rate })),
         h("div", { class: "sd-o-bar", "aria-hidden": "true" }, h("div", { class: "sd-o-bar-fill", width: barW + "%" })),
         h("dl", { class: "sd-o-kv" }, [].concat.apply([], rows.map(function (r) { return [h("dt", { class: "sd-muted", text: r[0] }), h("dd", { text: r[2] !== undefined ? r[2] : fmt(r[1]) })]; }))));
     }
@@ -1235,19 +1261,19 @@
     function needsCard(n) {
       var items = [];
       var lead = function (x) { return function () { openLead(x.leadId); }; };
-      n.replies.forEach(function (x) { var li = String(x.type).indexOf("linkedin") === 0; items.push({ kind: li ? "LinkedIn reply" : "Email reply", c: li ? "message" : "email", text: x.name + (x.company ? " (" + x.company + ")" : "") + " replied: set an outcome", at: x.at, open: lead(x) }); });
-      n.meetings.forEach(function (x) { items.push({ kind: "Meeting", c: "meet", text: x.name + (x.company ? " (" + x.company + ")" : "") + " booked a meeting", at: x.at, open: lead(x) }); });
-      n.callbacks.forEach(function (x) { items.push({ kind: "Call back", c: "call", text: x.name + " asked for a call back", at: x.at, open: lead(x) }); });
-      n.bounces.forEach(function (x) { items.push({ kind: "Bounce", c: "bnc", text: x.name + (x.company ? " (" + x.company + ")" : "") + " email bounced: check the address", at: x.at, open: lead(x) }); });
+      n.replies.forEach(function (x) { var li = String(x.type).indexOf("linkedin") === 0; items.push({ kind: li ? "LinkedIn reply" : "Email reply", c: li ? "message" : "email", text: x.name + (x.company ? " (" + x.company + ")" : "") + " replied: set an outcome", at: x.at, campaign: x.campaign, open: lead(x) }); });
+      n.meetings.forEach(function (x) { items.push({ kind: "Meeting", c: "meet", text: x.name + (x.company ? " (" + x.company + ")" : "") + " booked a meeting", at: x.at, campaign: x.campaign, open: lead(x) }); });
+      n.callbacks.forEach(function (x) { items.push({ kind: "Call back", c: "call", text: x.name + " asked for a call back", at: x.at, campaign: x.campaign, open: lead(x) }); });
+      n.bounces.forEach(function (x) { items.push({ kind: "Bounce", c: "bnc", text: x.name + (x.company ? " (" + x.company + ")" : "") + " email bounced: check the address", at: x.at, campaign: x.campaign, open: lead(x) }); });
       n.alerts.slice(-5).forEach(function (a) { items.push({ kind: "Alert", c: "win", text: ALERTS[a.type] || a.type, at: a.at }); });
       if (n.unpushed.count) items.push({ kind: "To push", c: "win", text: fmt(n.unpushed.count) + " approved decision maker" + (n.unpushed.count === 1 ? "" : "s") + " not yet in lemlist"
         + (n.unpushed.items.length ? ": " + n.unpushed.items.slice(0, 3).map(function (x) { return x.company + " (" + x.track + ")"; }).join(", ") + (n.unpushed.count > 3 ? " …" : "") : ""), whenText: "Signal Desk" });
       var shown = items.slice(0, 12);
-      return h("section", { class: "sd-card sd-o-pad sd-o-stack-s sd-o-side", "aria-label": "Needs action" },
+      return h("section", { class: "sd-card sd-o-pad sd-o-needs-card sd-o-side", "aria-label": "Needs action" },
         h("h2", { class: "sd-o-h2" }, "Needs action ", h("span", { class: "sd-badge", text: String(items.length) })),
         items.length ? null : h("span", { class: "sd-muted sd-o-small", text: "Nothing waiting. Call-back requests arrive with the Calls tab." }),
         shown.map(function (it) {
-          var inner = [pill(it.kind, "sd-pill-fill sd-c-" + it.c), h("span", { class: "sd-o-stack-xxs" }, h("span", { class: "sd-o-text", text: it.text }), h("span", { class: "sd-muted sd-o-small", text: it.whenText || when(it.at) }))];
+          var inner = [pill(it.kind, "sd-pill-fill sd-c-" + it.c), h("span", { class: "sd-o-stack-xxs" }, h("span", { class: "sd-o-text", text: it.text }), h("span", { class: "sd-muted sd-o-small", text: it.whenText || when(it.at) + (it.campaign ? " · " + it.campaign : "") }))];
           return it.open ? h("button", { type: "button", class: "sd-o-action", onclick: it.open }, inner) : h("div", { class: "sd-o-action" }, inner);
         }),
         items.length > shown.length ? h("span", { class: "sd-muted sd-o-small", text: "+" + (items.length - shown.length) + " more (use “Needs action only” on the lead board)" }) : null);
@@ -1255,14 +1281,13 @@
     function funnelCard(f, label) {
       var max = Math.max.apply(null, f.map(function (x) { return x.value; }).concat([1]));
       return h("section", { class: "sd-card sd-o-pad sd-o-stack-s", "aria-label": "Funnel" },
-        head("Funnel: signal to new client", label),
+        head("Funnel: signal to new client", label, 13),
         h("ol", { class: "sd-o-funnel" }, f.map(function (x, i) {
           var rate = i === 3 || i === 4 || x.pct === null ? "" : x.pct + "%"; // as in the mockup: no % into "Pushed" and "Reached" (different bases)
-          return h("li", { class: "sd-o-funnel-row" }, h("span", { class: "sd-o-text", text: x.name + (x.scope === "workbook" ? " *" : "") }),
+          return h("li", { class: "sd-o-funnel-row", title: x.scope === "workbook" ? "From the master sheet: counts all campaigns, not only the selected ones" : null }, h("span", { class: "sd-o-text", text: x.name }),
             h("span", { class: "sd-o-funnel-track", "aria-hidden": "true" }, h("span", { class: "sd-o-funnel-fill sd-f-" + i, width: Math.max(1, Math.round(100 * x.value / max)) + "%" })),
             h("span", { class: "sd-o-funnel-val" }, fmt(x.value) + " ", h("span", { class: "sd-muted sd-o-small", text: rate })));
-        })),
-        h("span", { class: "sd-muted sd-o-small", text: "* Signals found, Verified and DMs approved come from the master sheet and cover all campaigns." }));
+        })));
     }
     function compareView(cd) {
       var rows = [["Leads", "leads"], ["Reached", "reached"], ["Email reply %", "email"], ["Invite accept %", "invite"], ["LI message reply %", "message"], ["Call connect %", "call"], ["Meetings", "meetings"], ["New jobs", "jobs"], ["Deals", "deals"], ["New clients", "clients"]];
@@ -1286,8 +1311,8 @@
         tile("Reached on LinkedIn", t.linkedin, "invite or message", "invite"),
         tile("Reached by phone", t.phone, "real conversations, of " + fmt(t.calls.value) + (t.calls.value === 1 ? " call" : " calls"), "call"),
         tile("Meetings", t.meetings, "from all channels", "meet"), tile("New jobs", t.jobs, "roles opened in Atlas", "win"),
-        tile("Deals", t.deals, "Atlas opportunities won", "win"), tile("New clients", t.clients, "first placement", "int")));
-      body.appendChild(h("section", { class: "sd-o-stack-s", "aria-label": "Channels" }, head("By channel", plabel + " · each channel counted separately"),
+        tile("Deals", t.deals, "Atlas opportunities won", "win"), tile("New clients", t.clients, "first placement or contract", "int")));
+      body.appendChild(h("section", { class: "sd-o-stack-s", "aria-label": "Channels" }, head("By channel", plabel + " · each channel counted separately", 13, true),
         h("div", { class: "sd-o-channels" }, CHANNELS.map(function (def) { return channelCard(def, d.channels[def.k]); }))));
       body.appendChild(h("div", { class: "sd-o-split" },
         h("section", { class: "sd-card sd-o-pad sd-o-stack-s sd-o-main-col", "aria-label": "Results by channel" },
@@ -1295,17 +1320,17 @@
           table(["Channel", "Reached", "Responded", "Meetings", "New jobs", "Deals", "New clients"], d.business.map(function (r) {
             return { total: r.channel === "Total", cells: [h("span", { class: "sd-o-dotlabel" }, dot("sd-sq sd-c-" + (BIZ_COLOR[r.channel] || "accent")), r.channel), fmt(r.reached), fmt(r.responded), fmt(r.meeting), fmt(r.job), fmt(r.deal), fmt(r.client)] };
           }), { caption: "From reach to business" }),
-          h("span", { class: "sd-muted sd-o-small", text: "Meetings from lemlist and the outcome buttons. New jobs, deals and clients from Atlas (roles, opportunities, placements), matched to the lead's company." })),
+          h("span", { class: "sd-muted sd-o-small", text: "Meetings from lemlist and the reply-outcome buttons. New jobs, deals and clients from Atlas (roles, opportunities, placements), matched to the lead's company." })),
         needsCard(d.needs)));
       body.appendChild(funnelCard(d.funnel, plabel));
       var running = {};
       st.data.campaigns.forEach(function (c) { running[c.id] = c.running; });
       body.appendChild(h("section", { class: "sd-card sd-o-pad sd-o-stack-s", "aria-label": "Campaigns" },
-        head("Running campaigns", plabel),
+        head("Running campaigns"),
         table(["Campaign", "Status", "Leads", "Email reply", "Invite accept", "LI message reply", "Call connect", "Meetings"], d.campaigns.map(function (r) {
           var tot = r.id === "total";
           return { total: tot, cells: [r.name, tot ? "" : pill(running[r.id] === false ? "Stopped" : "Running", "sd-pill-fill " + (running[r.id] === false ? "sd-c-fin" : "sd-c-int")),
-            r.leads === null ? "" : fmt(r.leads), rateText(r.email), rateText(r.invite), rateText(r.message), rateText(r.call), fmt(r.meetings)] };
+            r.leads === null ? "" : fmt(r.leads), rateText(r.email), rateText(r.invite), rateText(r.message), rateText(r.call), h("span", { class: "sd-o-num-strong", text: fmt(r.meetings) })] };
         }), { caption: "Running campaigns", left: 2, wide: true }),
         h("span", { class: "sd-muted sd-o-small", text: "Each cell: rate (responses / actions). Email reply = replies ÷ delivered · Invite accept = accepted ÷ sent · LI message reply = replies ÷ messages sent · Call connect = conversations ÷ calls made." })));
     }
@@ -1333,7 +1358,7 @@
       boardBox.classList.remove("sd-hidden");
       var setF = function (k, v) { f[k] = v; b.page = 1; loadBoard(); };
       var all = d ? Object.keys(d.byStatus).reduce(function (s, k) { return s + d.byStatus[k]; }, 0) : 0;
-      boardBox.appendChild(h("div", { class: "sd-o-between sd-o-wrap" },
+      boardBox.appendChild(h("div", { class: "sd-o-board-head" },
         h("h2", { class: "sd-o-h2" }, "Live lead board ", h("span", { class: "sd-muted sd-o-h2-sub", text: d ? "· " + fmt(d.total) + " of " + fmt(all) + " running leads" : "" })),
         h("div", { class: "sd-o-group", role: "group", "aria-label": "View" },
           btn("Table", b.view === "table", function () { b.view = "table"; renderBoard(); }),
@@ -1342,6 +1367,7 @@
       var tmr = null;
       search.addEventListener("input", function () { clearTimeout(tmr); tmr = setTimeout(function () { setF("q", search.value); }, 300); });
       var allChip = btn("All ", !f.status, function () { setF("status", ""); });
+      allChip.setAttribute("aria-label", "All statuses");
       allChip.appendChild(h("span", { class: "sd-count", text: fmt(all) }));
       var statusChips = [allChip];
       if (d) Object.keys(d.byStatus).forEach(function (s) {
@@ -1350,18 +1376,22 @@
         c.appendChild(h("span", { class: "sd-count", text: fmt(d.byStatus[s]) }));
         statusChips.push(c);
       });
-      boardBox.appendChild(h("div", { class: "sd-o-wrap" }, search, h("div", { class: "sd-o-wrap", role: "group", "aria-label": "Status" }, statusChips)));
+      var extra = ["campaign", "channel", "track", "group"].filter(function (k) { return f[k]; }).length + (f.needs ? 1 : 0);
+      var more = h("button", { type: "button", class: "sd-btn" + (b.more || extra ? " sd-btn-on" : ""), "aria-expanded": b.more ? "true" : "false",
+        onclick: function () { b.more = !b.more; renderBoard(); }, text: "More filters" + (extra ? " (" + extra + ")" : "") + " ▾" });
+      boardBox.appendChild(h("div", { class: "sd-o-wrap" }, search, statusChips, more));
       var camps = st.data.campaigns.filter(function (c) { return st.data.selection.ids.indexOf(c.id) >= 0; });
       var needs = h("input", { type: "checkbox", class: "sd-check", checked: f.needs });
       needs.addEventListener("change", function () { setF("needs", needs.checked); });
-      boardBox.appendChild(h("div", { class: "sd-o-wrap" },
+      if (b.more) boardBox.appendChild(h("div", { class: "sd-card sd-o-filters sd-o-wrap", role: "group", "aria-label": "More filters" },
         select("Campaign", f.campaign, [["", "All selected campaigns"]].concat(camps.map(function (c) { return [c.id, c.name]; })), function (v) { setF("campaign", v); }),
         select("Channel state", f.channel, [["", "Any channel state"], ["email:replied", "Email replied"], ["email:bounced", "Email bounced"], ["email:sent", "Email sent, no reply"],
           ["invite:accepted", "Invite accepted"], ["invite:pending", "Invite pending"], ["message:replied", "LinkedIn replied"], ["message:sent", "LinkedIn sent, no reply"],
           ["call:positive", "Call positive"], ["call:answered", "Call answered"], ["call:no answer", "Call no answer"], ["call:not called", "Not called yet"]], function (v) { setF("channel", v); }),
         select("IT or HR", f.track, [["", "IT and HR"], ["IT", "IT signals"], ["HR", "HR signals"]], function (v) { setF("track", v); }),
         select("Role group", f.group, [["", "All role groups"]].concat((d ? d.roleGroups : []).map(function (g) { return [g, g]; })), function (v) { setF("group", v); }),
-        h("label", { class: "sd-o-checkrow sd-pill-box" }, needs, "Needs action only")));
+        h("label", { class: "sd-o-checkrow sd-pill-box" }, needs, "Needs action only"),
+        extra ? btn("Clear filters", null, function () { ["campaign", "channel", "track", "group"].forEach(function (k) { f[k] = ""; }); f.needs = false; b.page = 1; loadBoard(); }) : null));
       if (b.loading && !d) { boardBox.appendChild(h("p", { class: "sd-o-loading" }, h("span", { class: "sd-spinner" }), " Loading leads…")); return; }
       if (!d) return;
       if (b.view === "board") {
@@ -1419,38 +1449,36 @@
       if (!st.lead) return;
       var l = st.lead;
       var close = function () { st.lead = null; renderPanel(false); };
-      var box = h("section", { class: "sd-card sd-o-pad sd-o-stack sd-o-accent-border", "aria-label": "Lead timeline", tabindex: "-1" });
+      var box = h("section", { class: "sd-card sd-o-tl", "aria-label": "Lead timeline", tabindex: "-1" });
       var links = [];
       if (l.timeline) {
         var li = safeHref(l.linkedin), lem = safeHref(l.lemlistUrl), job = safeHref(l.signal && l.signal.jobUrl);
         if (li) links.push(h("a", { href: li, target: "_blank", rel: "noopener noreferrer", class: "sd-btn sd-btn-link", text: "LinkedIn" }));
         if (lem) links.push(h("a", { href: lem, target: "_blank", rel: "noopener noreferrer", class: "sd-btn sd-btn-link", text: "Open in lemlist" }));
-        if (job) links.push(h("a", { href: job, target: "_blank", rel: "noopener noreferrer", class: "sd-btn sd-btn-link", text: "Job ad" }));
       }
       var sigLine = l.timeline ? (l.signal.jobTitle ? "From " + (l.signal.track || "IT") + " signal: " + l.signal.jobTitle : "No approved signal linked")
-        + " · Atlas: " + (l.atlas ? (l.atlas.matching !== null ? fmt(l.atlas.matching) + " matching titles of " : "") + fmt(l.atlas.pool) + " in pool" : "no pool") : "";
-      box.appendChild(h("div", { class: "sd-o-between sd-o-wrap sd-o-top" },
-        h("div", { class: "sd-o-stack-xxs" }, h("h2", { class: "sd-o-h2 sd-o-h2-lg", text: l.name || "Lead" }),
-          h("span", { class: "sd-muted", text: [l.title, l.company].filter(Boolean).join(" · ") }),
-          l.timeline ? h("span", { class: "sd-o-signal sd-o-signal-lg", text: sigLine }) : null,
-          l.timeline ? h("span", { class: "sd-o-wrap-xs sd-o-small" }, statusPill(l.status), h("span", { text: l.campaign + " · " + l.level.label })) : null),
+        + " · Atlas: " + (l.atlas ? (l.atlas.matching !== null ? fmt(l.atlas.matching) + " matching titles" : fmt(l.atlas.pool) + " in pool") : "no pool") : "";
+      box.appendChild(h("div", { class: "sd-o-tl-head" },
+        h("div", { class: "sd-o-stack-xxs sd-o-gap4" }, h("h2", { class: "sd-o-h2 sd-o-h2-lg", text: l.name || "Lead" }),
+          h("span", { class: "sd-muted sd-o-text", text: [l.title, l.company].filter(Boolean).join(" · ") }),
+          l.timeline ? h("span", { class: "sd-o-signal sd-o-signal-lg", text: sigLine }) : null),
         h("div", { class: "sd-o-wrap" }, links, btn("Close", null, close))));
       if (st.leadLoading) box.appendChild(h("p", { class: "sd-o-loading" }, h("span", { class: "sd-spinner" }), " Loading…"));
       if (l.error) box.appendChild(notice("error", l.error));
       if (l.timeline) {
-        box.appendChild(chips(l.channels));
-        box.appendChild(h("div", { class: "sd-o-split" },
-          h("ol", { class: "sd-o-timeline sd-o-main-col" }, collapseTimeline(l.timeline).map(function (e) {
+        box.appendChild(h("div", { class: "sd-o-tl-body" },
+          h("ol", { class: "sd-o-timeline" }, collapseTimeline(l.timeline).map(function (e) {
             return h("li", null, h("span", { class: "sd-muted sd-o-small", text: when(e.at) + (e.n > 1 && when(e.last) !== when(e.at) ? " – " + when(e.last) : "") }), dot("sd-tl-dot " + (TL[e.kind] || TL.other)),
               h("span", { class: "sd-o-text", text: e.label + (e.n > 1 ? " ×" + e.n : "") + (e.detail ? " · " + e.detail : "") }));
           })),
-          h("div", { class: "sd-o-stack-s sd-o-side" }, h("span", { class: "sd-o-strong", text: "Outcome" }),
+          h("div", { class: "sd-o-tl-side" }, h("span", { class: "sd-o-strong", text: "Outcome" }),
             h("div", { class: "sd-o-wrap" }, l.outcomes.map(function (o) {
               var on = !!(l.outcome && l.outcome.outcome === o);
-              return btn(o, on, function () { setOutcome(on ? null : o); });
+              var b2 = btn(o, on, function () { setOutcome(on ? null : o); });
+              if (on) b2.title = "Set by " + l.outcome.by_user + " " + ago(l.outcome.at) + ". Click again to clear.";
+              return b2;
             })),
-            l.outcome ? h("span", { class: "sd-muted sd-o-small", text: "Set by " + l.outcome.by_user + " " + ago(l.outcome.at) }) : null,
-            h("span", { class: "sd-muted sd-o-small", text: "Saved in Signal Desk only (not sent to lemlist); counts in “From reach to business”. New job, deal and client are confirmed from Atlas when they exist there." }))));
+            h("span", { class: "sd-muted sd-o-small", text: "Saved in Signal Desk; counts in \"From reach to business\". New job, deal and client are confirmed from Atlas when they exist there." }))));
       }
       panel.appendChild(box);
       if (scroll) { box.scrollIntoView({ behavior: "smooth", block: "start" }); box.focus({ preventScroll: true }); }
@@ -1600,6 +1628,9 @@
   else if (page === "verified") verifiedPage();
   else if (page === "hr") verifiedPage(HR_CFG);
   else if (page === "outreach") outreachPage();
+  else if (page === "calls") callsPage();
   else if (page === "candidates") candidatesPage();
   else if (page === "lists") listsPage();
+  liveStatus();
+  setInterval(function () { liveStatus(); }, 10000);
 })();

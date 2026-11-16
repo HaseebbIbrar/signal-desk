@@ -292,7 +292,6 @@ final class Outreach
         foreach ($d['byLead'] as $v) if ($v['channels']['invite'] === 'pending') $pending++;
         $msgSent = $cnt(['linkedinSent', 'linkedinInMailSent', 'linkedinVoiceNoteDone']);
         $msgReplies = $cnt(['linkedinReplied', 'linkedinVoiceNoteReplied']);
-        $msgOpened = $cnt(['linkedinOpened']);
         $liReached = $leadsWith(['linkedinInviteDone', 'linkedinSent', 'linkedinInMailSent', 'linkedinVoiceNoteDone']);
 
         $dialerCalls = $cnt(['aircallDone']);
@@ -337,7 +336,7 @@ final class Outreach
                 'invite' => ['label' => 'LinkedIn invites', 'rateName' => 'Acceptance rate', 'rate' => $rate($invAcc, $invSent), 'actions' => $invSent, 'responses' => $invAcc,
                     'reached' => count($channelReached['invite']), 'extra' => ['label' => 'Still pending', 'value' => $pending, 'pct' => null], 'meetings' => $meetingsFrom('invite')],
                 'message' => ['label' => 'LinkedIn messages', 'rateName' => 'Reply rate', 'rate' => $rate($msgReplies, $msgSent), 'actions' => $msgSent, 'responses' => $msgReplies,
-                    'reached' => count($channelReached['message']), 'extra' => ['label' => 'Opened', 'value' => $msgOpened, 'pct' => $msgSent ? round(100 * $msgOpened / $msgSent, 1) : null], 'meetings' => $meetingsFrom('message')],
+                    'reached' => count($channelReached['message']), 'extra' => ['label' => 'Sent to connections', 'value' => $cnt(['linkedinSent', 'linkedinVoiceNoteDone']), 'pct' => null], 'meetings' => $meetingsFrom('message')],
                 'call' => ['label' => 'Calls', 'rateName' => 'Connect rate', 'rate' => $rate($conversations, $callsMade), 'actions' => $callsMade, 'responses' => $conversations,
                     'reached' => count($callLeads), 'extra' => ['label' => 'Positive calls', 'value' => $positiveCalls, 'pct' => null], 'meetings' => $meetingsFrom('call')],
             ],
@@ -485,7 +484,9 @@ final class Outreach
     {
         $d = $this->load($ids);
         $items = ['replies' => [], 'meetings' => [], 'callbacks' => [], 'bounces' => []];
+        $names = array_column($this->store->all('SELECT id, name FROM campaigns'), 'name', 'id');
         foreach ($d['byLead'] as $id => $v) {
+            $v['campaignName'] = $names[$v['lead']['campaign_id']] ?? '';
             $last = null;
             foreach ($v['acts'] as $a) $last = $a;
             $hasOutcome = $v['outcome'] !== null;
@@ -505,7 +506,7 @@ final class Outreach
     private static function brief(array $v, array $a): array
     {
         $l = $v['lead'];
-        return ['leadId' => $l['lead_id'], 'name' => trim($l['first_name'] . ' ' . $l['last_name']), 'company' => $l['company'], 'type' => $a['type'], 'at' => $a['created_at']];
+        return ['leadId' => $l['lead_id'], 'name' => trim($l['first_name'] . ' ' . $l['last_name']), 'company' => $l['company'], 'campaign' => $v['campaignName'] ?? '', 'type' => $a['type'], 'at' => $a['created_at']];
     }
 
     /** Signals found -> Verified -> DMs approved (workbook, all campaigns) -> Pushed -> Reached -> Responded -> Meeting -> New job/deal -> New client. */
@@ -521,7 +522,7 @@ final class Outreach
         foreach ($this->load($ids)['leads'] as $l) if (($t = self::ts($l['added_at'])) >= $start && $t < $end) $pushed++;
         $steps = [['Signals found', $sum('signals'), 'workbook'], ['Verified', $sum('verified'), 'workbook'], ['DMs approved', $sum('approved'), 'workbook'],
             ['Pushed to lemlist', $pushed, 'selection'], ['Reached', $m['tiles']['reached'], 'selection'], ['Responded', $m['respondedLeads'], 'selection'],
-            ['Meeting', $m['tiles']['meetings'], 'selection'], ['New job/deal', $m['tiles']['jobs'] + $m['tiles']['deals'], 'selection'], ['New client', $m['tiles']['clients'], 'selection']];
+            ['Meeting', $m['tiles']['meetings'], 'selection'], ['New job / deal', $m['tiles']['jobs'] + $m['tiles']['deals'], 'selection'], ['New client', $m['tiles']['clients'], 'selection']];
         $out = [];
         $prev = null;
         foreach ($steps as [$name, $n, $scope]) {

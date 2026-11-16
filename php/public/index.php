@@ -6,7 +6,7 @@ declare(strict_types=1);
 // serve the static assets, and route /health.php to its file.
 if (PHP_SAPI === 'cli-server') {
     $p = (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-    if (preg_match('#^/assets/[A-Za-z0-9._-]+$#', $p) && is_file(__DIR__ . $p)) return false;
+    if (preg_match('#^/assets/(fonts/)?[A-Za-z0-9._-]+$#', $p) && is_file(__DIR__ . $p)) return false;
     if ($p === '/health.php') {
         require __DIR__ . '/health.php';
         return true;

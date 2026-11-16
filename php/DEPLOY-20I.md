@@ -413,6 +413,8 @@ It registers **https://signals.swooscale.com/hooks/lemlist** for all events, wit
 
 A new tab **Outreach** (shown when lemlist is on). It reads only Signal Desk's own copy (`storage/lemlist.sqlite`, filled by the cron above) and refreshes every minute. It sends nothing to lemlist.
 
+**Look:** the Outreach tab follows the approved mockup (`signal-desk-design/outreach-mockup.dc.html`). The top bar (logo, tabs, **Calls** with its open-task count, the green "Live · last lemlist event …" status and Log out) is one row on every page. **Calls** shows "coming soon" until the Calls tab is built. The Inter font is served by Signal Desk itself from `public/assets/fonts/` (no Google Fonts); upload that folder with the rest, and the new `.htaccess` rule that serves it.
+
 **Running campaigns only.** Paused, ended, archived and draft campaigns are not shown anywhere on the tab. When a campaign stops running, it disappears at the next sync; its history stays in the database (12-month pruning) and comes back if the campaign is restarted. To also show stopped campaigns:
 ```php
 'LEMLIST_SHOW_STOPPED' => 'false',   // 'true' = also show stopped campaigns

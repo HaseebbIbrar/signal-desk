@@ -227,7 +227,7 @@ test('Lead logic on fixture sequences: "Step N / total · type" incl. condition 
         'lea_it07' => ['Step 1 / 6 · Email', 'Paused', ['email' => 'sent', 'invite' => 'not sent', 'message' => 'not sent', 'call' => 'not called']],
         'lea_hr01' => ['Step 2 / 4 · LinkedIn invite', 'In sequence', ['email' => 'sent', 'invite' => 'pending', 'message' => 'not sent', 'call' => 'not called']],
         'lea_hr02' => ['Step 2 / 4 · LinkedIn invite', 'Connected', ['email' => 'sent', 'invite' => 'accepted', 'message' => 'not sent', 'call' => 'not called']],
-        'lea_hr03' => ['Step 4 / 4 · Call', 'Finished – no reply', ['email' => 'sent', 'invite' => 'pending', 'message' => 'sent', 'call' => 'called']],
+        'lea_hr03' => ['Step 4 / 4 · Call', 'Finished, no reply', ['email' => 'sent', 'invite' => 'pending', 'message' => 'sent', 'call' => 'called']],
     ];
     foreach ($want as $lead => [$level, $status, $channels]) {
         $v = t_lead_view($store, $lead);
@@ -244,7 +244,7 @@ test('Lead logic on fixture sequences: "Step N / total · type" incl. condition 
     eq('positive', LeadLogic::channels([], [['call_status' => 'voicemail'], ['call_status' => 'connected-positive']], $st)['call']);
     eq('Interested', LeadLogic::status([], [], ['n' => 4, 'total' => 6], LeadLogic::channels([], [['call_status' => 'connected-positive']], $st)));
     eq('In sequence', LeadLogic::status([['type' => 'paused', 'created_at' => '2026-11-01'], ['type' => 'resumed', 'created_at' => '2026-11-02']], [], ['n' => 2, 'total' => 6], LeadLogic::channels([])), 'resumed after a pause');
-    eq('New job/deal', LeadLogic::status([], [], ['n' => 1, 'total' => 6], LeadLogic::channels([]), 'Deal'));
+    eq('New job / deal', LeadLogic::status([], [], ['n' => 1, 'total' => 6], LeadLogic::channels([]), 'Deal'));
 });
 
 test('12-month retention: old activities, events, calls and stale leads are pruned; lead emails/phones exist only in the leads table', function () {

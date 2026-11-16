@@ -198,6 +198,7 @@ final class App
             '/verified' => $this->html(Views::shell('verified', $user, $this->config)),
             '/hr' => $this->html(Views::shell('hr', $user, $this->config)),
             '/outreach' => $this->html(Views::shell('outreach', $user, $this->config)),
+            '/calls' => $this->html(Views::shell('calls', $user, $this->config)),
             '/candidates' => $this->html(Views::shell('candidates', $user, $this->config)),
             '/lists' => $this->html(Views::shell('lists', $user, $this->config)),
             default => $this->html(Views::notFound(), 404),
@@ -477,7 +478,7 @@ final class Views
         $label = Config::label($config);
         if ($label === '') return '';
         $text = $label === 'MOCK DATA' ? 'MOCK DATA: not connected to SharePoint' : 'DEV COPY: writing to the test copy of the workbook';
-        return '<div class="bg-warn px-4 py-1 text-center text-xs font-bold tracking-wide text-black">' . self::e($text) . '</div>';
+        return '<div class="sd-banner bg-warn px-4 py-1 text-center text-xs font-bold tracking-wide text-black">' . self::e($text) . '</div>';
     }
 
     public static function login(?string $error, array $config): string
@@ -500,16 +501,37 @@ final class Views
     public static function shell(string $page, array $user, array $config): string
     {
         $csrf = Auth::csrfToken();
-        $tab = fn (string $href, string $label, bool $active) => '<a href="' . $href . '"' . ($active ? ' aria-current="page"' : '')
-            . ' class="border-b-2 px-3 py-2 text-sm font-medium ' . ($active ? 'border-pink text-white' : 'border-transparent text-white/60 hover:text-white') . '">' . $label . '</a>';
+        $lemlist = Lemlist::mode($config) !== 'off';
+        $wide = in_array($page, ['outreach', 'calls'], true); // the lemlist tabs use the full-width mockup layout
+        // Top bar (one row, as in the outreach mockup): logo, tabs, lemlist live status, user + log out.
+        $tab = fn (string $href, string $label, bool $active, string $kind = 'link', string $extra = '') => '<a href="' . $href . '"' . ($active ? ' aria-current="page"' : '')
+            . ' class="sd-top-tab' . ($kind === 'strong' ? ' sd-top-tab-strong' : '') . ($active ? ' sd-top-tab-on' : '') . '">' . $label . $extra . '</a>';
+        $tabs = $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . $tab('/hr', 'HR signals', $page === 'hr')
+            . $tab('/candidates', 'Candidates', $page === 'candidates') . (Atlas::mode($config) === 'off' ? '' : $tab('/lists', 'Lists', $page === 'lists'));
+        $live = '';
+        if ($lemlist) {
+            $tabs .= $tab('/outreach', 'Outreach', $page === 'outreach', 'strong');
+            $due = 0;
+            $eventAt = null;
+            try {
+                $store = Lemlist::store($config);
+                $due = (int) $store->one("SELECT COUNT(*) FROM tasks WHERE status = 'due'");
+                $eventAt = $store->meta('last_event_at');
+            } catch (\Throwable) {
+                // no lemlist database yet: no badge, no live status
+            }
+            $tabs .= $tab('/calls', 'Calls', $page === 'calls', 'strong', $due ? ' <span class="sd-top-badge">' . $due . '</span>' : '');
+            $live = '<span id="sd-live" class="sd-live" data-at="' . self::e((string) ($eventAt ?? '')) . '"><span class="sd-dot sd-c-muted" aria-hidden="true"></span><span class="sd-live-text">lemlist</span></span>';
+        }
         return self::head('Signal Desk · SwooScale')
-            . '<body class="antialiased" data-page="' . self::e($page) . '" data-csrf="' . self::e($csrf) . '" data-atlas="' . (Atlas::mode($config) === 'off' ? 'off' : 'on') . '" data-jd="' . (Atlas::mode($config) !== 'off' ? 'on' : 'off') . '" data-ai="' . (Llms::mode($config) !== 'off' ? 'on' : 'off') . '" data-prospeo="' . (Prospeo::mode($config) !== 'off' ? 'on' : 'off') . '"><div class="min-h-dvh">' . self::banner($config)
-            . '<header class="sticky top-0 z-20 border-b border-line/60 bg-black/70 backdrop-blur"><div class="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-3">'
-            . '<div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-pink" aria-hidden="true"></span><span class="font-semibold tracking-tight">Signal Desk</span></div>'
-            . '<div class="flex items-center gap-3 text-sm"><span class="hidden text-white/60 sm:inline">' . self::e($user['name']) . '</span>'
-            . '<form method="post" action="/logout"><input type="hidden" name="csrf" value="' . self::e($csrf) . '"><button type="submit" class="rounded-lg border border-line px-3 py-1.5 text-white/80 hover:border-pink hover:text-white">Log out</button></form></div></div>'
-            . '<nav class="mx-auto flex max-w-3xl gap-1 px-3 sm:px-4" aria-label="Main">' . $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . $tab('/hr', 'HR signals', $page === 'hr') . (Lemlist::mode($config) === 'off' ? '' : $tab('/outreach', 'Outreach', $page === 'outreach')) . $tab('/candidates', 'Candidates', $page === 'candidates') . (Atlas::mode($config) === 'off' ? '' : $tab('/lists', 'Lists', $page === 'lists')) . '</nav></header>'
-            . '<main id="app" class="mx-auto ' . ($page === 'outreach' ? 'sd-o-main' : 'max-w-3xl') . ' px-3 pb-16 pt-4 sm:px-4"><p class="flex items-center gap-2 text-sm text-white/70"><span class="sd-spinner"></span> Reading the master sheet…</p></main>'
+            . '<body class="antialiased' . ($wide ? ' sd-o-body' : '') . '" data-page="' . self::e($page) . '" data-csrf="' . self::e($csrf) . '" data-atlas="' . (Atlas::mode($config) === 'off' ? 'off' : 'on') . '" data-jd="' . (Atlas::mode($config) !== 'off' ? 'on' : 'off') . '" data-ai="' . (Llms::mode($config) !== 'off' ? 'on' : 'off') . '" data-prospeo="' . (Prospeo::mode($config) !== 'off' ? 'on' : 'off') . '"><div class="min-h-dvh">' . self::banner($config)
+            . '<header class="sd-top"><div class="sd-top-in">'
+            . '<div class="sd-top-left"><span class="sd-top-dot" aria-hidden="true"></span><span class="sd-top-brand">Signal Desk</span>'
+            . '<nav class="sd-top-nav" aria-label="Main">' . $tabs . '</nav></div>'
+            . '<div class="sd-top-right">' . $live
+            . '<form method="post" action="/logout" class="sd-top-form"><input type="hidden" name="csrf" value="' . self::e($csrf) . '"><button type="submit" class="sd-top-logout" title="Signed in as ' . self::e($user['name']) . '"><span class="sd-top-chip">' . self::e($user['name']) . ' · Log out</span></button></form>'
+            . '</div></div></header>'
+            . '<main id="app" class="' . ($wide ? 'sd-o-main' : 'mx-auto max-w-3xl px-3 pb-16 pt-4 sm:px-4') . '"><p class="flex items-center gap-2 text-sm text-white/70"><span class="sd-spinner"></span> Loading…</p></main>'
             . '</div><script src="' . self::e(App::asset('app.js')) . '" defer></script></body></html>';
     }
 

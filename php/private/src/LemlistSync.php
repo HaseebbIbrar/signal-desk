@@ -11,7 +11,7 @@ final class LeadLogic
     public const STEP_TYPES = ['email' => 'Email', 'linkedinInvite' => 'LinkedIn invite', 'linkedinSend' => 'LinkedIn message', 'phone' => 'Call',
         'conditional' => 'Condition', 'manual' => 'Manual', 'linkedinVisit' => 'Visit', 'linkedinVoiceNote' => 'LinkedIn voice note', 'api' => 'API',
         'whatsappMessage' => 'WhatsApp', 'sms' => 'SMS'];
-    public const STATUSES = ['Not started', 'In sequence', 'Connected', 'Replied', 'Interested', 'Meeting', 'New job/deal', 'Finished – no reply', 'Paused', 'Bounced', 'Unsubscribed'];
+    public const STATUSES = ['Not started', 'In sequence', 'Connected', 'Replied', 'Interested', 'Meeting', 'New job / deal', 'Finished, no reply', 'Paused', 'Bounced', 'Unsubscribed'];
 
     private const STEP_ACTIVITY = '/^(emails(Sent|Done|Ignored|Failed|Bounced)|linkedin(InviteDone|InviteFailed|Sent|SendFailed|VisitDone|VisitFailed|VisitSkipped|VoiceNoteDone|InMailSent|Done|Ignored)|aircall(Done|Ignored|Ended)|manual(Done|Ignored)|api(Done|Failed)|conditionChosen|skipped|whatsappMessageSent|smsSent)$/';
 
@@ -110,7 +110,7 @@ final class LeadLogic
             if ($t === 'resumed' && ($latestResume === null || $a['created_at'] > $latestResume)) $latestResume = $a['created_at'];
         }
         $any = fn (array $types) => (bool) array_intersect_key($has, array_flip($types));
-        if (in_array($outcome, ['New job', 'Deal', 'New client'], true)) return 'New job/deal';
+        if (in_array($outcome, ['New job', 'Deal', 'New client'], true)) return 'New job / deal';
         if ($outcome === 'Meeting' || $any(['meetingBooked'])) return 'Meeting';
         if ($outcome === 'Interested' || $channels['call'] === 'positive' || $any(['emailsInterested', 'linkedinInterested', 'aircallInterested', 'apiInterested', 'manualInterested'])) return 'Interested';
         if ($channels['email'] === 'replied' || $channels['message'] === 'replied' || $channels['call'] === 'answered' || $channels['call'] === 'negative'
@@ -118,8 +118,8 @@ final class LeadLogic
         if ($any(['emailsUnsubscribed', 'entityUnsubscribed', 'variableUnsubscribed', 'apiUnsubscribed', 'manualUnsubscribed'])) return 'Unsubscribed';
         if ($channels['email'] === 'bounced') return 'Bounced';
         if (!empty($lead['paused']) || ($latestPause !== null && ($latestResume === null || $latestResume < $latestPause))) return 'Paused';
-        if ($level['n'] > 0 && $level['total'] > 0 && $level['n'] >= $level['total'] && in_array((string) ($lead['status'] ?? ''), ['done', 'finished', 'ended'], true)) return 'Finished – no reply';
-        if (in_array((string) ($lead['status'] ?? ''), ['done', 'finished'], true) && $level['n'] > 0) return 'Finished – no reply';
+        if ($level['n'] > 0 && $level['total'] > 0 && $level['n'] >= $level['total'] && in_array((string) ($lead['status'] ?? ''), ['done', 'finished', 'ended'], true)) return 'Finished, no reply';
+        if (in_array((string) ($lead['status'] ?? ''), ['done', 'finished'], true) && $level['n'] > 0) return 'Finished, no reply';
         if ($channels['invite'] === 'accepted') return 'Connected';
         if ($level['n'] > 0) return 'In sequence';
         return 'Not started';
