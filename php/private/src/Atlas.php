@@ -1010,6 +1010,18 @@ final class AtlasListsSource implements CandidateSource
         if ($this->storageDir) {
             $idx = $this->index();
             $b = $this->indexBuilder()->status();
+            $now = ($this->now)();
+            if ($b['state'] === 'running' && $b['progressAt'] !== null && $now - $b['progressAt'] > IndexBuilder::STALL_WARN) {
+                $rows[] = ['Atlas title index build', 'WARN', 'running without progress for ' . round(($now - $b['progressAt']) / 3600, 1) . ' h (' . $b['done'] . ' of ' . $b['total'] . ' people)'
+                    . ($b['lastError'] ? ': last error "' . $b['lastError'] . '"' : '') . '. Check the atlas-index cron job, or use "Rebuild index" on /lists'];
+            }
+            if ($b['lastError']) {
+                $rows[] = ['Atlas title index: last error', $b['state'] === 'running' ? 'WARN' : 'OK', '"' . $b['lastError'] . '"' . ($b['lastErrorAt'] ? ' at ' . gmdate('Y-m-d H:i', $b['lastErrorAt']) . ' UTC' : '')
+                    . ($b['state'] === 'running' ? '' : ' (the build finished anyway)')];
+            }
+            if ($b['skipped'] || $b['retrying']) {
+                $rows[] = ['Atlas title index skipped', 'WARN', $b['skipped'] . ' people skipped (Atlas failed for them in ' . IndexBuilder::MAX_PERSON_RUNS . ' runs)' . ($b['retrying'] ? ', ' . $b['retrying'] . ' waiting for a retry' : '')];
+            }
             if (!$idx) {
                 $rows[] = ['Atlas title index', 'WARN', $b['state'] === 'running' ? "building: {$b['done']} of {$b['total']} people" : 'not built yet: run private/bin/atlas-index.php (cron) or "Rebuild index" on /lists'];
             } else {
@@ -1189,6 +1201,14 @@ final class MockAtlas
             return $ok(['status' => 'success', 'data' => ['url' => 'https://files.example.test/cv/' . $m[1] . '.pdf?signature=mock', 'expires_at' => '2026-10-20T12:05:00Z']]);
         }
         if ($path === '/api/v1/users') return $ok($paged([['id' => self::uuid('user-1'), 'name' => 'Mock User']]));
+        // business events for Outreach (fictional; companies match the mock lemlist leads)
+        $recent = gmdate('Y-m-d\TH:i:s\Z', time() - 2 * 86400);
+        if ($path === '/api/v1/projects') return $ok($paged([['id' => self::uuid('proj-1'), 'jobRole' => 'Security Architect', 'company' => ['id' => self::uuid('co-1'), 'name' => 'Example MSSP NV'], 'createdAt' => $recent],
+            ['id' => self::uuid('proj-2'), 'jobRole' => 'Talent pool', 'company' => null, 'createdAt' => $recent]]));
+        if ($path === '/api/v1/opportunities') return $ok($paged([['id' => self::uuid('opp-1'), 'name' => 'Meet NV deal', 'status' => 'won', 'updatedAt' => $recent]]));
+        if ($path === '/api/v1/opportunities/' . self::uuid('opp-1')) return $ok(['status' => 'success', 'data' => ['id' => self::uuid('opp-1'), 'status' => 'won', 'stageUpdatedAt' => $recent,
+            'companies' => [['id' => self::uuid('tc-1'), 'companyId' => self::uuid('co-2'), 'company' => ['id' => self::uuid('co-2'), 'name' => 'Meet NV']]]]]);
+        if ($path === '/api/v1/placements') return $ok($paged([['id' => self::uuid('pl-1'), 'client' => ['company' => ['id' => self::uuid('co-2'), 'name' => 'Meet NV']], 'createdAt' => $recent]]));
         return $notFound;
     }
 }

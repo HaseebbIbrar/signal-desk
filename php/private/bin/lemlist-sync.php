@@ -24,6 +24,8 @@ use SignalDesk\Config;
 use SignalDesk\Lemlist;
 use SignalDesk\LemlistLinker;
 use SignalDesk\LemlistSync;
+use SignalDesk\Atlas;
+use SignalDesk\OutreachBusiness;
 
 $opts = getopt('', ['max-seconds::', 'no-link']);
 $maxSeconds = max(10, min(3000, (int) ($opts['max-seconds'] ?? 240)));
@@ -45,6 +47,15 @@ try {
     if ($r['result'] === 'done' && !isset($opts['no-link'])) {
         $l = LemlistLinker::run($store, Lemlist::tabReader(Config::backend($config)), Lemlist::atlasCounter($config, $privateDir));
         $line .= sprintf(' linked=%d (IT %d, HR %d)', $l['linked'], $l['it'], $l['hr']);
+        $atlas = Atlas::source($config, $privateDir);
+        if ($atlas) { // Atlas new jobs / deals / placements for "From reach to business", hourly, read-only
+            try {
+                $b = OutreachBusiness::sync($atlas->client(), $store, time());
+                if (empty($b['skipped'])) $line .= sprintf(' atlas: jobs=%d deals=%d placements=%d', $b['job'], $b['deal'], $b['placement']);
+            } catch (\Throwable $e) {
+                $line .= ' atlas: ' . $e->getMessage();
+            }
+        }
     }
     $line .= sprintf(' leads=%d openTasks=%d', $store->one('SELECT COUNT(*) FROM leads'), $store->one("SELECT COUNT(*) FROM tasks WHERE status IN ('due','upcoming','paused')"));
     fwrite(STDOUT, $line . "\n");

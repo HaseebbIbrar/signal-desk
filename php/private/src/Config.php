@@ -17,7 +17,7 @@ final class Config
         'ATLAS_BACKEND', 'ATLAS_API_KEY', 'ATLAS_BASE_URL', 'ATLAS_PROFILE_URL',
         'ANTHROPIC_BACKEND', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_MONTHLY_LIMIT_EUR', 'ANTHROPIC_USD_TO_EUR',
         'PROSPEO_BACKEND', 'PROSPEO_API_KEY', 'PROSPEO_DAILY_CREDIT_CAP',
-        'LEMLIST_BACKEND', 'LEMLIST_API_KEY', 'LEMLIST_WEBHOOK_SECRET', 'LEMLIST_USER_MAP', 'LEMLIST_SHARED_SENDER', 'LEMLIST_SENDER_ALLOWED', 'LEMLIST_ATTRIBUTION',
+        'LEMLIST_BACKEND', 'LEMLIST_API_KEY', 'LEMLIST_WEBHOOK_SECRET', 'LEMLIST_USER_MAP', 'LEMLIST_SHARED_SENDER', 'LEMLIST_SENDER_ALLOWED', 'LEMLIST_ATTRIBUTION', 'LEMLIST_SHOW_STOPPED',
     ];
 
     /** @return array<string,string> validated settings */
@@ -91,6 +91,7 @@ final class Config
         }
         if (!in_array($c['LEMLIST_ATTRIBUTION'], ['', 'first_positive', 'all_touches'], true)) throw new ConfigError('LEMLIST_ATTRIBUTION must be first_positive or all_touches.');
         if ($c['LEMLIST_ATTRIBUTION'] === '') $c['LEMLIST_ATTRIBUTION'] = 'first_positive';
+        $c['LEMLIST_SHOW_STOPPED'] = in_array(strtolower(trim((string) ($c['LEMLIST_SHOW_STOPPED'] ?? ''))), ['1', 'true', 'yes'], true) ? 'true' : 'false';
         if ($c['APP_ENV'] === 'production' && $c['APP_ORIGIN'] === '') {
             throw new ConfigError('APP_ORIGIN must be set in production (e.g. https://signals.swooscale.com).');
         }

@@ -199,6 +199,8 @@ How it behaves:
 - It spaces its Atlas reads to **500 per minute**, safely under Atlas's 1,200/min, so the rest of the app still has room.
 - Each person costs 2 reads: the profile, and whether a CV exists. About 3,500 people take roughly 15 minutes in total.
 - If Atlas asks it to slow down (HTTP 429), it stops and resumes on the next run.
+- If Atlas fails for one person, the build carries on with everyone else and tries that person again in the next runs; after 3 failed runs the person is **skipped** (counted as `skipped=N` in the cron output and on `/health.php`). Short Atlas hiccups (5xx, timeouts) are retried after 2, 5 and 15 seconds in the same run. When Atlas fails for everyone (an outage) nobody is skipped: the run stops and the next one carries on.
+- The cron output ends with `error="…"` when something went wrong (Atlas's own message, no personal data), e.g. `result=error … error="Atlas error 503"`.
 - Progress goes to `storage/audit.log` as counts only. Check it from SSH with `php …/bin/atlas-index.php --status`.
 
 **Rebuild index** on the Lists page starts a build straight away, at most once an hour. It keeps building in 20-second steps while the page stays open.
@@ -407,6 +409,30 @@ It registers **https://signals.swooscale.com/hooks/lemlist** for all events, wit
 
 **/health.php rows:** key set and reachable · plan / calls API · webhook registered (FAIL if lemlist disabled it) · last webhook event (WARN after 24 h without one) · last sync (WARN after 1 h) · campaigns, leads (linked to DMs) and open tasks synced · who may send.
 
+## lemlist — Phase 2: the Outreach tab
+
+A new tab **Outreach** (shown when lemlist is on). It reads only Signal Desk's own copy (`storage/lemlist.sqlite`, filled by the cron above) and refreshes every minute. It sends nothing to lemlist.
+
+**Running campaigns only.** Paused, ended, archived and draft campaigns are not shown anywhere on the tab. When a campaign stops running, it disappears at the next sync; its history stays in the database (12-month pruning) and comes back if the campaign is restarted. To also show stopped campaigns:
+```php
+'LEMLIST_SHOW_STOPPED' => 'false',   // 'true' = also show stopped campaigns
+```
+
+**Top of the tab:** Today / 7 days / 30 days (numbers compared with the period before; "Today" is compared with yesterday up to the same hour) and **Campaigns: All running (N)**:
+- tick campaigns (with search, Select all, Clear), or use a quick group made from the names ("All MPC", "All HR");
+- **Save** a selection under a name; saved selections are per Signal Desk user (`storage/outreach-selections.json`) and can be overwritten or deleted (×);
+- the selection is in the address bar (`/outreach?c=<campaign ids>&p=7`), so a link opens the same view; without one, your last selection opens;
+- if a campaign in your selection stops running, it is dropped and a small notice says so.
+- **Compare**: pick 2 or 3 campaigns to see them side by side.
+
+**Sections (all follow the selection):** tiles (leads reached, by email, LinkedIn, phone, meetings, new jobs, deals, new clients) · 4 channel cards (email reply rate = replies ÷ delivered, LinkedIn invite acceptance, LinkedIn message reply rate, call connect rate; each with its responses/actions) · **From reach to business** (per channel; credited per `LEMLIST_ATTRIBUTION`) · **Needs action** (replies without an outcome, meetings booked, bounces, lemlist alerts, approved DMs not yet in lemlist; call-back requests arrive with the Calls tab) · **Funnel** (the first three steps come from the master sheet and cover all campaigns) · **Running campaigns** with a Total row · **Live lead board** (table or board by stage; filters for status, campaign, channel state, IT/HR, role group, needs action; search).
+
+Click a lead for its timeline (signal found → approval → pushed → every step) with links to LinkedIn, lemlist and the job, the Atlas pool count and the outcome buttons (Interested, Not now, Not interested, Meeting, New job, Deal, New client). **Outcomes are stored in Signal Desk only** and audited with the lead id, never sent to lemlist.
+
+**New jobs, deals, new clients** come from Atlas (read-only, once an hour from the lemlist cron): projects created, opportunities won and placements, matched to the lead's company by name (legal forms such as NV/BV/SA ignored). A "new client" is a company's first placement.
+
+**Known limits:** lemlist's API has no activity for calls logged through the API, so call numbers come from lemlist's dialer events plus the calls Signal Desk logs (Calls tab). The "lemlist ↗" link opens the campaign; lemlist has no public link format for a single lead.
+
 ## What the app writes
 
 | Tab | Allowed writes |
@@ -444,6 +470,8 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 | "Atlas pools found" WARN: "not visible to this key" | The list is private to another user. Make it public in Atlas, or use that user's key. |
 | Badges say "title index not built yet" / "building…" | Set up the cron job (Candidate Desk → Title index) or click **Lists → Rebuild index** and keep the page open until it finishes. |
 | "Atlas title index age" WARN (older than 36 h) | The cron job isn't running. Check the command and path in My20i → Scheduled Tasks, and run it once by hand with `--status`. |
+| "Atlas title index build" WARN (running without progress for over 6 h) | The cron job stopped or keeps failing. The row shows the last error; run the cron command by hand to see the `error="…"` part, or click **Lists → Rebuild index**. |
+| "Atlas title index skipped" WARN | Atlas kept failing for some people (3 runs); the index was finished without them. They are included again in the next nightly build. |
 | "JD matching needs it" / "INDEX_NOT_READY" | Build the title index first (see above). |
 | A JD's must-haves look wrong | Edit them before **Find candidates**. If a skill or title is often missed, add it to `storage/jd-dictionary.json` (see JD matching), then rebuild the index. |
 | "Deep match in Claude" shows a text box instead of copying | The browser blocked the clipboard (it needs https). Select the text and copy it yourself. |
@@ -458,3 +486,6 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 | "Refresh from Atlas" says wait | It can be used once a minute. New lists are also picked up automatically every hour. |
 | "Atlas: busy, try later" | Atlas's rate limit was reached. Badges retry on the next page load, and counts are cached for 6 hours. |
 | The Verified page or badges look out of date after an upload | 20i caches `/assets/*`. The pages use versioned asset URLs (`?v=`), so make sure your SFTP client sets the upload time; then reload. |
+| Outreach shows "No running lemlist campaigns yet" | The lemlist cron hasn't run since the upload, or no campaign is running. Wait for the next run (every 15 minutes) and check `/health.php`. |
+| A campaign is missing from the Outreach picker | Only running campaigns are shown. Restart it in lemlist (it comes back with its history at the next sync) or set `'LEMLIST_SHOW_STOPPED' => 'true'`. |
+| Outreach shows New jobs / Deals / New clients as 0 | They come from Atlas once an hour and match the lead's company name; check the Atlas rows on `/health.php` and that the company is spelled the same in Atlas. |

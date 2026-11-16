@@ -16,6 +16,20 @@ final class MockLemlist
     /** @var array<int,array{status:int,headers:array,body:string}> responses to return before normal handling */
     public array $queue = [];
     private array $sequences = [];
+    /** Campaign list returned by GET /campaigns (tests change statuses or add campaigns). */
+    public array $campaigns = [
+        ['_id' => 'cam_it000001', 'name' => 'IT decision makers – Belgium', 'status' => 'running', 'sequenceId' => 'seq_it_main', 'createdAt' => '2026-10-01T08:00:00Z'],
+        ['_id' => 'cam_hr000001', 'name' => 'HR decision makers – Belgium', 'status' => 'running', 'sequenceId' => 'seq_hr_main', 'createdAt' => '2026-10-02T08:00:00Z'],
+        ['_id' => 'cam_old00001', 'name' => 'Old test', 'status' => 'paused', 'sequenceId' => 'seq_old', 'createdAt' => '2026-01-02T08:00:00Z'],
+    ];
+
+    /** Test helper: a copy of a campaign's sequences and leads under a new id. */
+    public function cloneCampaign(string $from, string $id, string $name, string $status = 'running'): void
+    {
+        $this->campaigns[] = ['_id' => $id, 'name' => $name, 'status' => $status, 'sequenceId' => 'seq_' . $id, 'createdAt' => '2026-11-01T08:00:00Z'];
+        $this->sequences[$id] = $this->sequences[$from];
+        $this->leads[$id] = array_map(fn ($l) => ['_id' => $l['_id'] . 'x', 'campaignId' => $id, 'contactId' => $l['contactId'] . 'x'] + $l, $this->leads[$from]);
+    }
 
     public function __construct()
     {
@@ -137,9 +151,7 @@ final class MockLemlist
                 $s('no-answer', 'No answer', false), $s('wrong-number', 'Wrong number', false), $s('not-in-service', 'Not in service', false)]]);
         }
         if ($method === 'GET' && $path === '/campaigns') {
-            $all = [['_id' => 'cam_it000001', 'name' => 'IT decision makers – Belgium', 'status' => 'running', 'sequenceId' => 'seq_it_main', 'createdAt' => '2026-10-01T08:00:00Z'],
-                ['_id' => 'cam_hr000001', 'name' => 'HR decision makers – Belgium', 'status' => 'running', 'sequenceId' => 'seq_hr_main', 'createdAt' => '2026-10-02T08:00:00Z'],
-                ['_id' => 'cam_old00001', 'name' => 'Old test', 'status' => 'paused', 'sequenceId' => 'seq_old', 'createdAt' => '2026-01-02T08:00:00Z']];
+            $all = $this->campaigns;
             $f = array_values(array_filter($all, fn ($c) => !isset($q['status']) || $c['status'] === $q['status']));
             return $ok(['campaigns' => array_slice($f, (int) ($q['offset'] ?? 0), (int) ($q['limit'] ?? 100)), 'pagination' => ['totalRecords' => count($f)]]);
         }

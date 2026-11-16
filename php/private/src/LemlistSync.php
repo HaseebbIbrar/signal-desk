@@ -161,6 +161,7 @@ final class LemlistSync
                     $team = $this->client->get('/team', ['version' => 'v2']);
                     $users = array_map(fn ($u) => ['userId' => (string) ($u['userId'] ?? ''), 'name' => (string) ($u['name'] ?? ''), 'email' => (string) ($u['email'] ?? ''), 'role' => (string) ($u['role'] ?? '')], $team['users'] ?? []);
                     $this->store->setMeta('team_users', $users);
+                    $this->store->setMeta('team_id', (string) ($team['_id'] ?? ''));
                     $this->store->setMeta('team_hooks', array_map(fn ($h) => array_intersect_key($h, array_flip(['_id', 'targetUrl', 'type', 'disabled', 'disabledReason', 'disabledAt', 'lastErrorStatus', 'createdAt'])), $team['hooks'] ?? []));
                     try {
                         $ch = $this->client->get('/user/channels');
@@ -182,11 +183,18 @@ final class LemlistSync
                     $list = $this->client->get('/campaigns', ['version' => 'v2', 'status' => 'running', 'limit' => 100, 'offset' => $st['offset']]);
                     $items = is_array($list['campaigns'] ?? null) ? $list['campaigns'] : (array_is_list($list) ? $list : []);
                     foreach ($items as $c) {
-                        $this->store->upsertCampaign(['id' => (string) $c['_id'], 'name' => (string) ($c['name'] ?? ''), 'status' => (string) ($c['status'] ?? 'running'),
+                        if (($c['status'] ?? 'running') !== 'running') continue; // running campaigns only
+                        $this->store->upsertCampaign(['id' => (string) $c['_id'], 'name' => (string) ($c['name'] ?? ''), 'status' => 'running', 'running' => 1,
                             'sequence_id' => (string) ($c['sequenceId'] ?? ''), 'created_at' => (string) ($c['createdAt'] ?? ''), 'total_steps' => null, 'updated_at' => ($this->now)()]);
                         $st['campaigns'][] = (string) $c['_id'];
                     }
-                    if (count($items) >= 100) { $st['offset'] += 100; } else { $st['phase'] = 'campaign'; $st['offset'] = 0; $st['ci'] = 0; $st['part'] = 'sequences'; }
+                    if (count($items) >= 100) { $st['offset'] += 100; } else {
+                        // campaigns no longer running: hidden from Outreach, history kept (12-month pruning); a restart brings them back
+                        $ids = $st['campaigns'];
+                        $sql = "UPDATE campaigns SET running = 0, status = 'stopped' WHERE running = 1" . ($ids ? ' AND id NOT IN (' . implode(',', array_fill(0, count($ids), '?')) . ')' : '');
+                        $this->store->db->prepare($sql)->execute($ids);
+                        $st['phase'] = 'campaign'; $st['offset'] = 0; $st['ci'] = 0; $st['part'] = 'sequences';
+                    }
                 } elseif ($phase === 'campaign') {
                     if ($st['ci'] >= count($st['campaigns'])) { $st['phase'] = 'activities'; $st['offset'] = 0; continue; }
                     $cid = $st['campaigns'][$st['ci']];
@@ -366,6 +374,27 @@ final class LemlistLinker
         }
         $store->setMeta('last_link_at', time());
         $store->setMeta('approved_dms', count($signals));
+        // approved decision makers not (yet) in any lemlist campaign: "Needs action" (no LinkedIn URLs stored, just the job)
+        $inLemlist = array_flip(array_filter(array_column($store->all('SELECT linkedin_key FROM leads'), 'linkedin_key')));
+        $unpushed = [];
+        foreach ($signals as $k => $s) {
+            if (isset($inLemlist[$k])) continue;
+            $unpushed[] = ['track' => $s['signal_track'], 'row' => $s['signal_row'], 'company' => $s['signal_company'], 'jobTitle' => $s['signal_job_title'], 'approvedAt' => $s['signal_approved_at']];
+        }
+        usort($unpushed, fn ($a, $b) => strcmp((string) $b['approvedAt'], (string) $a['approvedAt']));
+        $store->setMeta('unpushed_dms', ['count' => count($unpushed), 'items' => array_slice($unpushed, 0, 50)]);
+        // the first funnel steps come from the workbook: rows per date (Signals by block date, verify tab by Date Found, approvals by Date Verified)
+        $counts = ['signals' => [], 'verified' => [], 'approved' => []];
+        foreach (Sheet::blocks($readTab(Sheet::SIGNALS)) as $b) if ($b['date']) $counts['signals'][$b['date']] = ($counts['signals'][$b['date']] ?? 0) + count($b['rows']);
+        foreach ($readTab(Sheet::VERIFY) as $r) {
+            $d = $r['row'] >= 2 && Sheet::isDataRow($r['cells']) ? ExcelDate::cellToIso($r['cells'][0] ?? null) : null;
+            if ($d) $counts['verified'][$d] = ($counts['verified'][$d] ?? 0) + 1;
+        }
+        foreach ([Sheet::DECISION_MAKERS, Sheet::HR_DECISION_MAKERS] as $tab) foreach ($readTab($tab) as $r) {
+            $d = $r['row'] >= 2 ? ExcelDate::cellToIso($r['cells'][Sheet::DMT_DATE_VERIFIED] ?? null) : null;
+            if ($d) $counts['approved'][$d] = ($counts['approved'][$d] ?? 0) + 1;
+        }
+        $store->setMeta('workbook_counts', $counts);
         return $out;
     }
 }

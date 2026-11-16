@@ -123,6 +123,10 @@ final class IndexBuilder
     public const BUTTON_INTERVAL = 3600;      // "Rebuild index" starts a build at most once an hour
     public const SAVE_EVERY = 25;
     public const LOG_EVERY = 250;
+    public const MAX_PERSON_RUNS = 3;         // a person who fails in 3 runs is skipped; the build carries on
+    public const BACKOFF_MS = [2000, 5000, 15000]; // transient Atlas errors (5xx, timeout): wait and retry in the same run
+    public const DOWN_AFTER = 5;              // this many people failing in a row = Atlas is down: no strikes, end the run
+    public const STALL_WARN = 6 * 3600;       // health: WARN when a running build made no progress for this long
 
     /** @var callable(): int */
     public $now;
@@ -180,7 +184,65 @@ final class IndexBuilder
             'lastStartedAt' => isset($st['lastStartedAt']) ? (int) $st['lastStartedAt'] : null,
             'builtAt' => $idx ? gmdate('c', $idx->builtAt) : null, 'entries' => $idx ? count($idx->entries) : 0,
             'lastError' => $st['lastError'] ?? null,
+            'lastErrorAt' => isset($st['lastErrorAt']) ? (int) $st['lastErrorAt'] : null,
+            'progressAt' => isset($st['progressAt']) ? (int) $st['progressAt'] : (isset($st['startedAt']) ? (int) $st['startedAt'] : null),
+            'skipped' => isset($st['skipped']) ? count($st['skipped']) : (int) ($st['lastSkipped'] ?? 0),
+            'retrying' => count($st['retry'] ?? []),
         ];
+    }
+
+    /** The cron output line: counts, skipped people and the last error text (no personal data). */
+    public static function cronLine(array $r, int $now): string
+    {
+        $line = sprintf('%s result=%s state=%s people=%d/%d index=%s entries=%d skipped=%d', gmdate('c', $now), $r['result'], $r['state'], $r['done'], $r['total'],
+            $r['builtAt'] ?? 'none', $r['entries'], $r['skipped'] ?? 0);
+        if (!empty($r['retrying'])) $line .= sprintf(' retrying=%d', $r['retrying']);
+        if (!empty($r['lastError'])) $line .= ' error="' . str_replace(['"', "\n", "\r"], ["'", ' ', ' '], (string) $r['lastError']) . '"';
+        return $line;
+    }
+
+    /** Error text for logs, cron output and /health: Atlas's own message without ids, at most 200 characters. */
+    public static function errorText(\Throwable $e): string
+    {
+        $m = preg_replace('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', '<id>', $e->getMessage()) ?? '';
+        $m = trim(preg_replace('/\s+/', ' ', $m) ?? '');
+        return mb_substr($m !== '' ? $m : get_class($e), 0, 200);
+    }
+
+    /** 5xx, timeouts, "did not answer", garbled replies: worth waiting and trying again. */
+    public static function isTransient(\Throwable $e): bool
+    {
+        return $e instanceof UpstreamError && (bool) preg_match('/^(Atlas error 5\d\d|Atlas did not answer|Could not reach Atlas|Atlas returned an unexpected response)/', $e->getMessage());
+    }
+
+    /** Errors that are not about one person (bad key, guard): end the run, count no strikes. */
+    private static function isFatal(\Throwable $e): bool
+    {
+        return !($e instanceof UpstreamError) || str_contains($e->getMessage(), 'refused the API key');
+    }
+
+    private function noteError(array &$st, \Throwable $e): void
+    {
+        $st['lastError'] = self::errorText($e);
+        $st['lastErrorAt'] = ($this->now)();
+    }
+
+    /** Run $fn; on a transient Atlas error wait (2 s, 5 s, 15 s) and try again while the run has time left. */
+    private function withBackoff(callable $fn, int $deadline, array &$st): mixed
+    {
+        foreach (array_merge(self::BACKOFF_MS, [null]) as $wait) {
+            try {
+                return $fn();
+            } catch (AtlasRateLimited $e) {
+                throw $e;
+            } catch (AppError $e) {
+                if ($wait === null || !self::isTransient($e) || ($this->now)() + intdiv($wait, 1000) >= $deadline) throw $e;
+                $this->noteError($st, $e);
+                Audit::event('atlas_index', ['event' => 'retry', 'message' => self::errorText($e), 'waitMs' => $wait]);
+                ($this->pacer->sleep)($wait);
+            }
+        }
+        throw new \LogicException('unreachable');
     }
 
     /**
@@ -221,12 +283,17 @@ final class IndexBuilder
             }
             $pools = $this->poolIds();
             $st = ['status' => 'running', 'trigger' => $trigger, 'startedAt' => $now, 'lastStartedAt' => $now, 'phase' => 'members',
-                'pools' => $pools, 'poolPos' => 0, 'page' => 1, 'poolCounts' => [], 'members' => [], 'order' => [], 'pos' => 0, 'entries' => [], 'reads' => 0];
+                'pools' => $pools, 'poolPos' => 0, 'page' => 1, 'poolCounts' => [], 'members' => [], 'order' => [], 'pos' => 0, 'entries' => [], 'reads' => 0,
+                'run' => 0, 'fails' => [], 'retry' => [], 'tried' => [], 'skipped' => [], 'progressAt' => $now];
             JsonStore::write($this->stateFile(), $st);
             Audit::event('atlas_index', ['event' => 'start', 'trigger' => $trigger, 'pools' => count($pools)]);
         }
         $readsAtStart = $this->pacer->reads;
         $result = 'running';
+        $st['run'] = (int) ($st['run'] ?? 0) + 1;      // builds from before this version have none of these keys
+        foreach (['fails', 'retry', 'tried', 'skipped'] as $k) $st[$k] ??= [];
+        $st['progressAt'] ??= (int) ($st['startedAt'] ?? $now);
+        $streak = [];
         try {
             while (($this->now)() < $deadline) {
                 if ($st['phase'] === 'members') {
@@ -238,10 +305,11 @@ final class IndexBuilder
                     }
                     $listId = $st['pools'][$st['poolPos']];
                     try {
-                        $r = $this->get("/api/v1/lists/$listId/members", ['page' => $st['page'], 'pageSize' => 100]);
+                        $r = $this->withBackoff(fn () => $this->get("/api/v1/lists/$listId/members", ['page' => $st['page'], 'pageSize' => 100]), $deadline, $st);
                     } catch (NotFoundError) {
                         $r = ['data' => [], 'pagination' => ['totalPages' => 0]];
                     }
+                    $st['progressAt'] = ($this->now)();
                     foreach ($r['data'] ?? [] as $m) {
                         $pid = (string) ($m['personId'] ?? $m['person']['id'] ?? '');
                         if (!AtlasGuard::isUuid($pid)) continue;
@@ -256,26 +324,71 @@ final class IndexBuilder
                     }
                     continue;
                 }
-                // phase "people"
-                if ($st['pos'] >= count($st['order'])) {
-                    $this->finish($st);
-                    $result = 'done';
-                    break;
+                // phase "people": first everyone in order, then (once per run) the people who failed before
+                $fromRetry = false;
+                if ($st['pos'] < count($st['order'])) {
+                    $pid = $st['order'][$st['pos']];
+                } else {
+                    $pid = null;
+                    foreach ($st['retry'] as $r) if ((int) ($st['tried'][$r] ?? 0) < $st['run']) { $pid = $r; break; }
+                    if ($pid === null) {
+                        if (!$st['retry']) {
+                            $this->finish($st);
+                            $result = 'done';
+                        }
+                        break; // everyone left was tried in this run: the next run tries them again
+                    }
+                    $fromRetry = true;
                 }
-                $pid = $st['order'][$st['pos']];
-                $entry = $this->entryFor($pid, array_values(array_unique($st['members'][$pid] ?? [])));
-                if ($entry) $st['entries'][$pid] = $entry;
-                $st['pos']++;
+                try {
+                    $lists = array_values(array_unique($st['members'][$pid] ?? []));
+                    $entry = $this->withBackoff(fn () => $this->entryFor($pid, $lists), $deadline, $st);
+                    if ($entry) $st['entries'][$pid] = $entry;
+                    unset($st['fails'][$pid], $st['tried'][$pid]);
+                    $st['retry'] = array_values(array_diff($st['retry'], [$pid]));
+                    $streak = [];
+                } catch (AtlasRateLimited $e) {
+                    throw $e;
+                } catch (AppError $e) {
+                    if (self::isFatal($e)) throw $e;
+                    $this->noteError($st, $e);
+                    $st['fails'][$pid] = (int) ($st['fails'][$pid] ?? 0) + 1;
+                    $st['tried'][$pid] = $st['run'];
+                    $streak[] = $pid;
+                    if (count($streak) >= self::DOWN_AFTER) { // not one person: Atlas itself is failing. No strikes; try again next run.
+                        foreach ($streak as $sp) {
+                            $st['fails'][$sp]--;
+                            unset($st['tried'][$sp]);
+                            if ($st['fails'][$sp] <= 0) unset($st['fails'][$sp]);
+                            if (!in_array($sp, $st['retry'], true)) $st['retry'][] = $sp;
+                        }
+                        if (!$fromRetry) $st['pos']++;
+                        $st['lastError'] = 'Atlas is failing for every person (' . self::errorText($e) . ')';
+                        Audit::event('atlas_index', ['event' => 'error', 'message' => $st['lastError'], 'done' => $st['pos']]);
+                        $result = 'error';
+                        break;
+                    }
+                    if ($st['fails'][$pid] >= self::MAX_PERSON_RUNS) {
+                        $st['skipped'][] = $pid;
+                        $st['retry'] = array_values(array_diff($st['retry'], [$pid]));
+                        unset($st['fails'][$pid], $st['tried'][$pid]);
+                        Audit::event('atlas_index', ['event' => 'skipped', 'personId' => $pid, 'message' => self::errorText($e), 'runs' => self::MAX_PERSON_RUNS]);
+                    } elseif (!in_array($pid, $st['retry'], true)) {
+                        $st['retry'][] = $pid;
+                    }
+                }
+                if (!$fromRetry) $st['pos']++;
+                $st['progressAt'] = ($this->now)();
                 if ($st['pos'] % self::SAVE_EVERY === 0) JsonStore::write($this->stateFile(), $st);
-                if ($st['pos'] % self::LOG_EVERY === 0) Audit::event('atlas_index', ['event' => 'progress', 'done' => $st['pos'], 'total' => count($st['order'])]);
+                if (!$fromRetry && $st['pos'] % self::LOG_EVERY === 0) Audit::event('atlas_index', ['event' => 'progress', 'done' => $st['pos'], 'total' => count($st['order'])]);
             }
         } catch (AtlasRateLimited $e) {
             $result = 'paused';
             Audit::event('atlas_index', ['event' => 'paused', 'reason' => 'rate limit', 'retryAfter' => $e->retryAfter, 'done' => $st['pos']]);
         } catch (AppError $e) {
             $result = 'error';
-            $st['lastError'] = $e->getMessage();
-            Audit::event('atlas_index', ['event' => 'error', 'message' => $e->getMessage(), 'done' => $st['pos']]);
+            $this->noteError($st, $e);
+            Audit::event('atlas_index', ['event' => 'error', 'message' => $st['lastError'], 'done' => $st['pos']]);
         }
         if ($result !== 'done') {
             $st['reads'] = (int) ($st['reads'] ?? 0) + ($this->pacer->reads - $readsAtStart);
@@ -345,8 +458,9 @@ final class IndexBuilder
             @unlink($tmp);
         }
         TitleIndex::forget();
-        JsonStore::write($this->stateFile(), ['status' => 'idle', 'lastStartedAt' => $st['lastStartedAt'], 'lastBuiltAt' => $now]);
-        Audit::event('atlas_index', ['event' => 'done', 'entries' => count($st['entries']), 'pools' => count($st['poolCounts']),
+        JsonStore::write($this->stateFile(), ['status' => 'idle', 'lastStartedAt' => $st['lastStartedAt'], 'lastBuiltAt' => $now, 'lastSkipped' => count($st['skipped'] ?? []),
+            'lastError' => $st['lastError'] ?? null, 'lastErrorAt' => $st['lastErrorAt'] ?? null]);
+        Audit::event('atlas_index', ['event' => 'done', 'entries' => count($st['entries']), 'skipped' => count($st['skipped'] ?? []), 'pools' => count($st['poolCounts']),
             'seconds' => $now - (int) $st['startedAt'], 'reads' => (int) ($st['reads'] ?? 0) + $this->pacer->reads]);
     }
 }

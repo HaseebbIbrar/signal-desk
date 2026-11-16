@@ -72,4 +72,6 @@ return [
     'LEMLIST_SENDER_ALLOWED' => '',
     'LEMLIST_USER_MAP' => '',
     'LEMLIST_ATTRIBUTION' => 'first_positive',
+    // Outreach shows RUNNING campaigns only. 'true' also shows stopped ones (their history is kept for 12 months either way).
+    'LEMLIST_SHOW_STOPPED' => 'false',
 ];

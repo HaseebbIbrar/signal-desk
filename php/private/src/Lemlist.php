@@ -216,7 +216,13 @@ CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, type TEXT, channel TEXT, 
 CREATE TABLE IF NOT EXISTS call_statuses (key TEXT PRIMARY KEY, label TEXT, answered INTEGER, positive INTEGER, negative INTEGER, pauses INTEGER, position INTEGER);
 CREATE TABLE IF NOT EXISTS stats (campaign_id TEXT, period TEXT, data TEXT, fetched_at INTEGER, PRIMARY KEY (campaign_id, period));
 CREATE TABLE IF NOT EXISTS calls (external_id TEXT PRIMARY KEY, lemlist_id TEXT, task_id TEXT, lead_id TEXT, user_id TEXT, by_user TEXT, call_status TEXT, started_at TEXT, created_at INTEGER);
+CREATE TABLE IF NOT EXISTS outcomes (lead_id TEXT PRIMARY KEY, outcome TEXT, by_user TEXT, at INTEGER);
+CREATE TABLE IF NOT EXISTS business (kind TEXT, id TEXT, company TEXT, company_key TEXT, at TEXT, PRIMARY KEY (kind, id));
+CREATE INDEX IF NOT EXISTS business_company ON business (company_key);
 SQL);
+        // added in Phase 2: campaigns that stop running are hidden but keep their history
+        $cols = array_column($this->db->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name');
+        if (!in_array('running', $cols, true)) $this->db->exec('ALTER TABLE campaigns ADD COLUMN running INTEGER DEFAULT 1');
     }
 
     public function meta(string $key, mixed $default = null): mixed
@@ -305,8 +311,8 @@ SQL);
     {
         $cut = gmdate('Y-m-d\TH:i:s\Z', $now - self::KEEP_DAYS * 86400);
         $out = [];
-        foreach (['activities' => "created_at < ?", 'events' => 'received_at < ?', 'leads' => 'updated_at < ?', 'calls' => 'created_at < ?'] as $t => $where) {
-            $arg = in_array($t, ['activities'], true) ? $cut : $now - self::KEEP_DAYS * 86400;
+        foreach (['activities' => "created_at < ?", 'events' => 'received_at < ?', 'leads' => 'updated_at < ?', 'calls' => 'created_at < ?', 'outcomes' => 'at < ?', 'business' => 'at < ?'] as $t => $where) {
+            $arg = in_array($t, ['activities', 'business'], true) ? $cut : $now - self::KEEP_DAYS * 86400;
             $st = $this->db->prepare("DELETE FROM $t WHERE $where");
             $st->execute([$arg]);
             $out[$t] = $st->rowCount();

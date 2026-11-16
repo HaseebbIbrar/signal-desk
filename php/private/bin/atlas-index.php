@@ -23,6 +23,7 @@ require $privateDir . '/src/bootstrap.php';
 use SignalDesk\Atlas;
 use SignalDesk\Audit;
 use SignalDesk\Config;
+use SignalDesk\IndexBuilder;
 
 $opts = getopt('', ['max-seconds::', 'force', 'status']);
 $maxSeconds = max(10, min(3000, (int) ($opts['max-seconds'] ?? 240)));
@@ -44,8 +45,7 @@ try {
     }
     @set_time_limit($maxSeconds + 60);
     $r = $builder->run($maxSeconds, isset($opts['force']), 'cron');
-    $line = sprintf('%s result=%s state=%s people=%d/%d index=%s entries=%d', gmdate('c'), $r['result'], $r['state'], $r['done'], $r['total'], $r['builtAt'] ?? 'none', $r['entries']);
-    fwrite(STDOUT, $line . "\n");
+    fwrite(STDOUT, IndexBuilder::cronLine($r, time()) . "\n");
     exit($r['result'] === 'error' ? 1 : 0);
 } catch (\Throwable $e) {
     fwrite(STDERR, 'atlas-index: ' . $e->getMessage() . "\n");

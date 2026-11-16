@@ -197,6 +197,7 @@ final class App
             '/', '/signals' => $path === '/' ? $this->redirect('/signals') : $this->html(Views::shell('signals', $user, $this->config)),
             '/verified' => $this->html(Views::shell('verified', $user, $this->config)),
             '/hr' => $this->html(Views::shell('hr', $user, $this->config)),
+            '/outreach' => $this->html(Views::shell('outreach', $user, $this->config)),
             '/candidates' => $this->html(Views::shell('candidates', $user, $this->config)),
             '/lists' => $this->html(Views::shell('lists', $user, $this->config)),
             default => $this->html(Views::notFound(), 404),
@@ -218,6 +219,13 @@ final class App
                     ),
                     'verified' => $this->service()->verifiedView(),
                     'hr' => $this->service()->verifiedView('hr'),
+                    'outreach' => $this->outreachView($user['email']),
+                    'outreach/leads' => $this->outreach()->leads($this->outreachIds(), [
+                        'status' => self::str($_GET['status'] ?? '', 40), 'campaign' => self::str($_GET['campaign'] ?? '', 64), 'track' => self::str($_GET['track'] ?? '', 4),
+                        'group' => self::str($_GET['group'] ?? '', 120), 'channel' => self::str($_GET['channel'] ?? '', 40), 'needs' => ($_GET['needs'] ?? '') === '1', 'q' => self::str($_GET['q'] ?? '', 100),
+                    ], max(1, min(1000, (int) ($_GET['page'] ?? 1)))),
+                    'outreach/lead' => $this->outreach()->lead(self::str($_GET['id'] ?? '', 64)),
+                    'outreach/compare' => $this->outreach()->compare($this->outreachIds(), self::str($_GET['p'] ?? '7', 8)),
                     'atlas/search' => $this->requireAtlas()->search(
                         self::str($_GET['title'] ?? ''), self::str($_GET['sub'] ?? ''), self::str($_GET['group'] ?? ''),
                         max(1, min(10000, (int) ($_GET['page'] ?? 1))), ($_GET['all'] ?? '') === '1',
@@ -268,6 +276,8 @@ final class App
                 'atlas/refresh' => $this->requireAtlas()->refresh($user['email']),
                 'atlas/index' => $this->atlasIndex(self::str($body['action'] ?? '', 20), $user['email']),
                 'jd/fetch' => $this->jdFetch($body['url'] ?? null),
+                'outreach/outcome' => $this->outreach()->setOutcome($body['leadId'] ?? null, $body['outcome'] ?? null, $user['email']),
+                'outreach/selection' => $this->outreachSelection($body, $user['email']),
                 'jd/parse' => $this->jd()->parse($body['text'] ?? null, $user['email']),
                 'jd/match' => $this->jd()->start($body['requirements'] ?? null, self::str($body['title'] ?? ''), self::str($body['sub'] ?? ''), self::str($body['group'] ?? ''), $user['email'], $body['jdText'] ?? ''),
                 'jd/page' => $this->jd()->page(self::str($body['matchId'] ?? '', 40), max(1, min(10, (int) ($body['page'] ?? 1)))),
@@ -331,6 +341,73 @@ final class App
         $client = Prospeo::client($this->config) ?? throw new AppError(503, 'PROSPEO_OFF', 'Prospeo is not configured (PROSPEO_API_KEY in config.php).');
         return $this->market = new MarketSearch($client, Prospeo::ledger($this->config), $this->config['STORAGE_DIR'], $this->atlas(),
             $this->atlas()?->dictionary() ?? JdDictionary::default());
+    }
+
+    private ?Outreach $outreach = null;
+
+    private function outreach(): Outreach
+    {
+        if ($this->outreach) return $this->outreach;
+        $store = Lemlist::mode($this->config) === 'off' ? null : Lemlist::store($this->config);
+        if (!$store) throw new AppError(503, 'LEMLIST_OFF', 'lemlist is not configured (LEMLIST_API_KEY in config.php).');
+        return $this->outreach = new Outreach($store, $this->config, $this->config['TIMEZONE']);
+    }
+
+    private function selections(): OutreachSelections
+    {
+        return new OutreachSelections($this->config['STORAGE_DIR'] . '/outreach-selections.json');
+    }
+
+    /** Selected campaign ids from ?c= (empty = all visible). */
+    private function outreachIds(): array
+    {
+        $visible = array_column($this->outreach()->campaigns(), 'id');
+        $sel = OutreachSelection::parse(isset($_GET['c']) ? (string) $_GET['c'] : null, null, $visible);
+        return $sel['all'] ? $visible : $sel['ids'];
+    }
+
+    /** The Outreach screen: campaigns, quick groups, saved selections, the resolved selection and its numbers. */
+    private function outreachView(string $user): array
+    {
+        $o = $this->outreach();
+        $campaigns = $o->campaigns();
+        $visible = array_column($campaigns, 'id');
+        $mine = $this->selections()->forUser($user);
+        $c = isset($_GET['c']) ? (string) $_GET['c'] : null;
+        $p = isset($_GET['p']) ? (string) $_GET['p'] : null;
+        if ($c === null && $p === null && $mine['last']) { // nothing in the URL: the user's last selection
+            $c = implode(',', $mine['last']['c'] ?? []);
+            $p = (string) ($mine['last']['p'] ?? '7');
+        }
+        $sel = OutreachSelection::parse($c, $p, $visible);
+        $ids = $sel['all'] ? $visible : $sel['ids'];
+        $period = $sel['p'] ?? '7';
+        if (!$sel['all'] && !$ids) { $ids = $visible; $sel['all'] = true; } // everything selected stopped running
+        $this->selections()->remember($user, $sel['all'] ? [] : $ids, $period);
+        $names = [];
+        foreach ($this->outreachStoppedNames($sel['dropped']) as $n) $names[] = $n;
+        return ['campaigns' => $campaigns, 'groups' => OutreachSelection::groups($campaigns), 'saved' => $mine['saved'],
+            'selection' => ['ids' => $ids, 'all' => $sel['all'], 'dropped' => $names, 'p' => $period, 'query' => OutreachSelection::query($sel['all'] ? [] : $ids, $period, count($visible))],
+            'dashboard' => $o->dashboard($ids, $period)];
+    }
+
+    private function outreachStoppedNames(array $ids): array
+    {
+        if (!$ids) return [];
+        $store = Lemlist::store($this->config);
+        $out = [];
+        foreach ($ids as $id) $out[] = (string) ($store->one('SELECT name FROM campaigns WHERE id = ?', [$id]) ?: $id);
+        return $out;
+    }
+
+    private function outreachSelection(array $body, string $user): array
+    {
+        $s = $this->selections();
+        return match ((string) ($body['action'] ?? '')) {
+            'save' => ['saved' => $s->save($user, $body['name'] ?? null, $body['c'] ?? null, isset($body['id']) && is_string($body['id']) ? $body['id'] : null)],
+            'delete' => ['deleted' => $s->delete($user, self::str($body['id'] ?? '', 40))],
+            default => throw new ValidationError('action must be save or delete'),
+        };
     }
 
     private function lemlistHook(string $method): void
@@ -431,8 +508,8 @@ final class Views
             . '<div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full bg-pink" aria-hidden="true"></span><span class="font-semibold tracking-tight">Signal Desk</span></div>'
             . '<div class="flex items-center gap-3 text-sm"><span class="hidden text-white/60 sm:inline">' . self::e($user['name']) . '</span>'
             . '<form method="post" action="/logout"><input type="hidden" name="csrf" value="' . self::e($csrf) . '"><button type="submit" class="rounded-lg border border-line px-3 py-1.5 text-white/80 hover:border-pink hover:text-white">Log out</button></form></div></div>'
-            . '<nav class="mx-auto flex max-w-3xl gap-1 px-3 sm:px-4" aria-label="Main">' . $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . $tab('/hr', 'HR signals', $page === 'hr') . $tab('/candidates', 'Candidates', $page === 'candidates') . (Atlas::mode($config) === 'off' ? '' : $tab('/lists', 'Lists', $page === 'lists')) . '</nav></header>'
-            . '<main id="app" class="mx-auto max-w-3xl px-3 pb-16 pt-4 sm:px-4"><p class="flex items-center gap-2 text-sm text-white/70"><span class="sd-spinner"></span> Reading the master sheet…</p></main>'
+            . '<nav class="mx-auto flex max-w-3xl gap-1 px-3 sm:px-4" aria-label="Main">' . $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . $tab('/hr', 'HR signals', $page === 'hr') . (Lemlist::mode($config) === 'off' ? '' : $tab('/outreach', 'Outreach', $page === 'outreach')) . $tab('/candidates', 'Candidates', $page === 'candidates') . (Atlas::mode($config) === 'off' ? '' : $tab('/lists', 'Lists', $page === 'lists')) . '</nav></header>'
+            . '<main id="app" class="mx-auto ' . ($page === 'outreach' ? 'sd-o-main' : 'max-w-3xl') . ' px-3 pb-16 pt-4 sm:px-4"><p class="flex items-center gap-2 text-sm text-white/70"><span class="sd-spinner"></span> Reading the master sheet…</p></main>'
             . '</div><script src="' . self::e(App::asset('app.js')) . '" defer></script></body></html>';
     }
 
