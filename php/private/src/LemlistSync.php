@@ -311,11 +311,17 @@ final class LemlistSync
 
     private function storeTask(array $t, int $seen): void
     {
+        self::storeTaskRow($this->store, $t, $seen);
+    }
+
+    /** One open task from GET /v2/tasks into the tasks table (the contact's phone goes to its lead, if the lead has none). */
+    public static function storeTaskRow(LemlistStore $store, array $t, int $seen): void
+    {
         $contact = $t['contact'] ?? [];
         if (!empty($t['leadId']) && !empty($contact['phone'])) {
-            $this->store->db->prepare("UPDATE leads SET phone = ? WHERE lead_id = ? AND (phone IS NULL OR phone = '')")->execute([mb_substr((string) $contact['phone'], 0, 60), (string) $t['leadId']]);
+            $store->db->prepare("UPDATE leads SET phone = ? WHERE lead_id = ? AND (phone IS NULL OR phone = '')")->execute([mb_substr((string) $contact['phone'], 0, 60), (string) $t['leadId']]);
         }
-        $this->store->upsertTask(['id' => (string) $t['_id'], 'type' => (string) ($t['type'] ?? ''), 'channel' => (string) ($t['channel'] ?? ''), 'status' => (string) ($t['status'] ?? ''),
+        $store->upsertTask(['id' => (string) $t['_id'], 'type' => (string) ($t['type'] ?? ''), 'channel' => (string) ($t['channel'] ?? ''), 'status' => (string) ($t['status'] ?? ''),
             'campaign_id' => (string) ($t['campaignId'] ?? ''), 'lead_id' => (string) ($t['leadId'] ?? ''), 'contact_id' => (string) ($t['contactId'] ?? ''),
             'assigned_to' => (string) ($t['assignedTo'] ?? ''), 'title' => mb_substr((string) ($t['title'] ?? ''), 0, 300), 'message' => mb_substr((string) ($t['message'] ?? ''), 0, 20000),
             'due_date' => (string) ($t['dueDate'] ?? ''), 'manual' => (int) !empty($t['manual']),
@@ -433,6 +439,15 @@ final class LemlistWebhook
             $alerts[] = ['type' => $type, 'at' => $t];
             $store->setMeta('alerts', array_slice($alerts, -50));
         }
+        if ($new) {
+            // Calls tab: replies make the inbox reload; task events make the queue reload (and close the task here at once)
+            if (preg_match('/Replied$|^linkedinInterested$|^emailsInterested$|^opportunityReplied$/', $type)) $store->setMeta('inbox_event_at', $t);
+            $taskId = is_string($d['taskId'] ?? null) ? $d['taskId'] : '';
+            if ($taskId !== '' || preg_match('/^(aircall|manual)(Done|Ignored)$|^taskDone$|^skipped$/', $type)) $store->setMeta('tasks_event_at', $t);
+            if (preg_match('/^opp_[A-Za-z0-9]{3,60}$/', $taskId) && preg_match('/Done$|Ignored$|^skipped$|^aircallEnded$/', $type)) {
+                $store->db->prepare("UPDATE tasks SET status = 'closed' WHERE id = ?")->execute([$taskId]);
+            }
+        }
         $store->setMeta('last_event_at', $t);
         Audit::event('lemlist_hook', ['type' => $type, 'duplicate' => !$new]);
         return [200, ['ok' => true, 'duplicate' => !$new]];
@@ -456,7 +471,10 @@ final class Lemlist
         $client = new LemlistClient($mode === 'mock' ? 'mock-key' : (string) $c['LEMLIST_API_KEY']);
         if ($mode === 'mock') {
             static $mock = null;
-            $mock ??= new MockLemlist();
+            if ($mock === null) {
+                $mock = new MockLemlist();
+                if (!empty($c['STORAGE_DIR']) && is_dir((string) $c['STORAGE_DIR'])) $mock->persist($c['STORAGE_DIR'] . '/lemlist-mock-state.json'); // local demo only
+            }
             $client->transport = $mock;
             $client->pacer = new ReadPacer(100000);
         }

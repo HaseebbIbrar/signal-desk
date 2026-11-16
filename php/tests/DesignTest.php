@@ -19,7 +19,7 @@ function t_design_config(string $storage, string $lemlist = 'mock'): array
 test('Top bar: one row with the tabs in mockup order, Calls with its open-task badge, the live status and log out', function () {
     [$store, , $dir] = t_lem_synced();
     $store->setMeta('last_event_at', '2026-11-16T09:00:00Z');
-    $due = (int) $store->one("SELECT COUNT(*) FROM tasks WHERE status = 'due'");
+    $due = \SignalDesk\CallDesk::dueCount($store);
     ok($due > 0, 'mock has due tasks');
     $html = Views::shell('outreach', ['email' => 'a@x.test', 'name' => 'Jonathan Perkins'], t_design_config($dir));
     eq(1, substr_count($html, '<nav'), 'one nav row, no second one');
@@ -28,7 +28,7 @@ test('Top bar: one row with the tabs in mockup order, Calls with its open-task b
     eq(['Signals', 'Verified', 'HR signals', 'Candidates', 'Lists', 'Outreach', 'Calls'], array_map('trim', $m[2]));
     eq(['/signals', '/verified', '/hr', '/candidates', '/lists', '/outreach', '/calls'], $m[1]);
     ok(str_contains($html, 'aria-current="page" class="sd-top-tab sd-top-tab-strong sd-top-tab-on">Outreach'), 'Outreach is the active tab');
-    ok(str_contains($html, '>Calls <span class="sd-top-badge">' . $due . '</span>'), 'Calls badge = open (due) tasks');
+    ok(str_contains($html, '>Calls <span class="sd-top-badge">' . $due . '</span>'), 'Calls badge = open (due) call + manual tasks');
     ok(str_contains($html, '<span id="sd-live" class="sd-live" data-at="2026-11-16T09:00:00Z">'), 'live status from the last webhook event');
     ok(str_contains($html, 'Jonathan Perkins · Log out'), 'user and log out on the right');
     ok(str_contains($html, '<body class="antialiased sd-o-body"') && str_contains($html, '<main id="app" class="sd-o-main">'), 'mockup page frame on the lemlist pages');
@@ -38,7 +38,9 @@ test('Top bar: one row with the tabs in mockup order, Calls with its open-task b
     $off = Views::shell('signals', ['email' => 'a@x.test', 'name' => 'A'], t_design_config(tmpdir(), 'off'));
     ok(!str_contains($off, '/outreach') && !str_contains($off, '/calls') && !str_contains($off, 'sd-live'), 'lemlist off: no Outreach/Calls tabs, no live status');
     $js = (string) file_get_contents(__DIR__ . '/../public/assets/app.js');
-    ok(str_contains($js, 'else if (page === "calls") callsPage();') && str_contains($js, 'Calls: coming soon'), 'Calls tab says coming soon until Phase 3');
+    ok(str_contains($js, 'else if (page === "calls") callsPage();') && !str_contains($js, 'Calls: coming soon'), 'the Calls tab is the SDR desk now');
+    foreach (['"SDR desk"', '"Call tasks"', '"Manual tasks"', '"Inbox"', '"Now calling"', '"1. Did they answer?"', '"2. Outcome"', '"3. Note (goes to lemlist)"', 'Save & complete task in lemlist',
+        '"Send via lemlist"', 'Approximate preview'] as $t) ok(str_contains($js, $t), "Calls tab wording $t");
 });
 
 test('Inter is self-hosted: 400/500/600/700 woff2 with content-hash names, @font-face in extra.css, no Google Fonts, served by .htaccess', function () {

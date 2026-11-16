@@ -24,6 +24,8 @@ final class Health
         if ($mode === 'off') return [['lemlist (Outreach & Calls)', 'WARN', 'off: set LEMLIST_API_KEY in config.php to enable it']];
         $rows = [['lemlist (Outreach & Calls)', 'OK', $mode === 'mock' ? 'mock (fake data)' : 'live']];
         if ($mode === 'lemlist') $rows[] = ['LEMLIST_API_KEY', 'OK', 'set'];
+        $rows[] = ['lemlist writes (Calls tab)', 'OK', ($config['LEMLIST_WRITES'] ?? 'off') === 'on' ? 'on: calls, tasks, replies and labels are sent to lemlist'
+            : 'off: preview mode, nothing is sent (set LEMLIST_WRITES to on after testing)'];
         $rows[] = ['LEMLIST_WEBHOOK_SECRET', ($config['LEMLIST_WEBHOOK_SECRET'] ?? '') !== '' ? 'OK' : 'WARN', ($config['LEMLIST_WEBHOOK_SECRET'] ?? '') !== '' ? 'set' : 'missing: the webhook will refuse all events'];
         try {
             $store ??= Lemlist::store($config);

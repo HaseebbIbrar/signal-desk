@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace SignalDesk;
 
-foreach (['Util', 'Errors', 'Sheet', 'Guard', 'Store', 'Backend', 'Config', 'Fixture', 'Service', 'Auth', 'Atlas', 'AtlasIndex', 'JdRules', 'Llm', 'JdMatch', 'Prospeo', 'Lemlist', 'LemlistSync', 'LemlistMock', 'Outreach', 'App', 'Health'] as $f) {
+foreach (['Util', 'Errors', 'Sheet', 'Guard', 'Store', 'Backend', 'Config', 'Fixture', 'Service', 'Auth', 'Atlas', 'AtlasIndex', 'JdRules', 'Llm', 'JdMatch', 'Prospeo', 'Lemlist', 'LemlistSync', 'LemlistMock', 'Outreach', 'Calls', 'App', 'Health'] as $f) {
     require_once __DIR__ . "/$f.php";
 }
 

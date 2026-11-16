@@ -227,6 +227,10 @@ final class App
                     ], max(1, min(1000, (int) ($_GET['page'] ?? 1)))),
                     'outreach/lead' => $this->outreach()->lead(self::str($_GET['id'] ?? '', 64)),
                     'outreach/compare' => $this->outreach()->compare($this->outreachIds(), self::str($_GET['p'] ?? '7', 8)),
+                    'calls' => $this->calls($user['email'])->view(),
+                    'calls/inbox' => $this->calls($user['email'])->inbox(self::str($_GET['filter'] ?? 'all', 20)),
+                    'calls/thread' => $this->calls($user['email'])->thread(self::str($_GET['contactId'] ?? '', 64)),
+                    'calls/updates' => $this->calls($user['email'])->updates(),
                     'atlas/search' => $this->requireAtlas()->search(
                         self::str($_GET['title'] ?? ''), self::str($_GET['sub'] ?? ''), self::str($_GET['group'] ?? ''),
                         max(1, min(10000, (int) ($_GET['page'] ?? 1))), ($_GET['all'] ?? '') === '1',
@@ -279,6 +283,10 @@ final class App
                 'jd/fetch' => $this->jdFetch($body['url'] ?? null),
                 'outreach/outcome' => $this->outreach()->setOutcome($body['leadId'] ?? null, $body['outcome'] ?? null, $user['email']),
                 'outreach/selection' => $this->outreachSelection($body, $user['email']),
+                'calls/log' => $this->calls($user['email'])->logCall($body),
+                'calls/task' => $this->calls($user['email'])->taskAction($body),
+                'calls/reply' => $this->calls($user['email'])->reply($body),
+                'calls/label' => $this->calls($user['email'])->label($body),
                 'jd/parse' => $this->jd()->parse($body['text'] ?? null, $user['email']),
                 'jd/match' => $this->jd()->start($body['requirements'] ?? null, self::str($body['title'] ?? ''), self::str($body['sub'] ?? ''), self::str($body['group'] ?? ''), $user['email'], $body['jdText'] ?? ''),
                 'jd/page' => $this->jd()->page(self::str($body['matchId'] ?? '', 40), max(1, min(10, (int) ($body['page'] ?? 1)))),
@@ -352,6 +360,14 @@ final class App
         $store = Lemlist::mode($this->config) === 'off' ? null : Lemlist::store($this->config);
         if (!$store) throw new AppError(503, 'LEMLIST_OFF', 'lemlist is not configured (LEMLIST_API_KEY in config.php).');
         return $this->outreach = new Outreach($store, $this->config, $this->config['TIMEZONE']);
+    }
+
+    /** Calls tab (SDR desk) for this Signal Desk user. */
+    private function calls(string $user): CallDesk
+    {
+        if (Lemlist::mode($this->config) === 'off') throw new AppError(503, 'LEMLIST_OFF', 'lemlist is not configured (LEMLIST_API_KEY in config.php).');
+        return new CallDesk(Lemlist::store($this->config), Lemlist::client($this->config), $this->config, $user,
+            new CallDeskLimiter($this->config['STORAGE_DIR'] . '/lemlist-limits.json'), $this->config['TIMEZONE']);
     }
 
     private function selections(): OutreachSelections
@@ -515,7 +531,7 @@ final class Views
             $eventAt = null;
             try {
                 $store = Lemlist::store($config);
-                $due = (int) $store->one("SELECT COUNT(*) FROM tasks WHERE status = 'due'");
+                $due = CallDesk::dueCount($store); // open call + manual tasks
                 $eventAt = $store->meta('last_event_at');
             } catch (\Throwable) {
                 // no lemlist database yet: no badge, no live status

@@ -15,6 +15,13 @@ final class MockLemlist
     public array $leads = [];
     /** @var array<int,array{status:int,headers:array,body:string}> responses to return before normal handling */
     public array $queue = [];
+    /** Calls tab: logged calls by externalId, inbox conversations by contactId, labels, sent replies. */
+    public array $callLog = [];
+    public array $inbox = [];
+    public array $labels = [];
+    public array $sent = [];
+    public bool $returnLabels = true;   // whether GET /inbox includes each conversation's label ids
+    private ?string $stateFile = null;
     private array $sequences = [];
     /** Campaign list returned by GET /campaigns (tests change statuses or add campaigns). */
     public array $campaigns = [
@@ -58,7 +65,7 @@ final class MockLemlist
         ];
         $lead = fn (string $id, string $cid, string $first, string $last, string $company, string $title, string $li, string $status = 'review', string $lastState = 'contacted') => [
             '_id' => $id, 'campaignId' => $cid, 'contactId' => 'ctc_' . substr($id, 4), 'firstName' => $first, 'lastName' => $last, 'companyName' => $company, 'jobTitle' => $title,
-            'linkedinUrl' => $li, 'email' => strtolower("$first.$last@mail.example"), 'phone' => '+32 470 00 0' . substr(md5($id), 0, 3), 'lastState' => $lastState, 'status' => $status,
+            'linkedinUrl' => $li, 'email' => strtolower("$first.$last@mail.example"), 'phone' => '+32 470 00 ' . sprintf('%02d %02d', crc32($id) % 100, crc32(strrev($id)) % 100), 'lastState' => $lastState, 'status' => $status,
             'createdAt' => '2026-10-20T09:00:00.000Z'];
         $this->leads = [
             'cam_it000001' => [
@@ -123,6 +130,138 @@ final class MockLemlist
                 'leadLastName' => 'Connected', 'leadCompanyName' => 'Link BV'],
             ['_id' => 'opp_done0001', 'type' => 'email', 'channel' => 'email', 'status' => 'done', 'title' => 'Done task', 'leadId' => 'lea_it03', 'campaignId' => $it, 'assignedTo' => self::USER, 'dueDate' => '2026-11-01T09:00:00.000Z'],
         ];
+        $task = fn (string $id, string $type, string $status, string $title, string $lead, string $cid, string $due, bool $manual, string $first, string $last, string $co, string $msg = '') => [
+            '_id' => $id, 'type' => $type, 'channel' => $type === 'phone' ? 'aircall' : ($type === 'manual' ? 'manual' : (str_starts_with($type, 'linkedin') ? 'linkedin' : 'email')),
+            'status' => $status, 'title' => $title, 'message' => $msg, 'leadId' => $lead, 'contactId' => 'ctc_' . substr($lead, 4), 'campaignId' => $cid, 'assignedTo' => self::USER,
+            'dueDate' => $due, 'manual' => $manual, 'leadFirstName' => $first, 'leadLastName' => $last, 'leadCompanyName' => $co];
+        $this->tasks[] = $task('opp_call0002', 'phone', 'due', 'Call Kim', 'lea_hr01', $hr, '2026-11-10T09:00:00.000Z', false, 'Kim', 'Example', 'Sample MSSP BV');
+        $this->tasks[] = $task('opp_call0003', 'phone', 'upcoming', 'Call Nel', 'lea_it04', $it, '2026-12-01T13:00:00.000Z', false, 'Nel', 'New', 'Fresh BV');
+        $this->tasks[] = $task('opp_fin00001', 'manual', 'due', 'Final call: Mia Meeting', 'lea_it05', $it, '2026-11-11T09:00:00.000Z', true, 'Mia', 'Meeting', 'Meet NV');
+        $this->tasks[] = $task('opp_eml00001', 'email', 'due', 'Review & send email (step 6)', 'lea_it01', $it, '2026-11-12T15:00:00.000Z', true, 'Ciso', 'Example', 'Example MSSP');
+        $this->tasks[] = $task('opp_ooo00001', 'manual', 'due', 'Out of office detected: check return date', 'lea_it07', $it, '2026-11-12T08:00:00.000Z', true, 'Pat', 'Paused', 'Hold NV');
+        $this->tasks[] = $task('opp_vis00001', 'manual', 'upcoming', 'Visit LinkedIn profile', 'lea_hr03', $hr, '2026-12-02T09:00:00.000Z', true, 'Fin', 'Ished', 'Done NV');
+        // inbox: label ids, conversations (contactId => thread)
+        $this->labels = [['_id' => 'lbl_interest1', 'name' => 'Interested', 'color' => '#22c55e'], ['_id' => 'lbl_vip000001', 'name' => 'VIP', 'color' => '#f59e0b']];
+        $msg = fn (string $type, string $at, string $text, ?string $subject = null) => ['_id' => 'act_m' . substr(md5($type . $at), 0, 10), 'type' => $type, 'createdAt' => $at,
+            'message' => $text, 'subject' => $subject] + (str_ends_with($type, 'Replied') ? [] : ['sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins']);
+        $conv = function (string $ctc, string $lead, string $name, array $channels, bool $read, array $labels, array $msgs) {
+            $last = end($msgs);
+            $this->inbox[$ctc] = ['_id' => 'ibx_' . substr($ctc, 4), 'contactId' => $ctc, 'leadId' => $lead, 'channels' => $channels, 'lastActivityAt' => $last['createdAt'],
+                'lastRepliedAt' => $last['createdAt'], 'lastRepliedChannel' => $channels[0], 'users' => [['userId' => self::USER, 'sender' => true, 'read' => $read]],
+                'contact' => ['_id' => $ctc, 'fullName' => $name], 'labels' => $labels, 'thread' => $msgs];
+        };
+        $conv('ctc_it02', 'lea_it02', 'Robin Replier', ['email'], false, ['lbl_vip000001'], [
+            $msg('emailsSent', '2026-11-02T08:05:00.000Z', '<p>Hi Robin, we place IT people in Belgium.</p>', 'Your Head of IT search'),
+            $msg('emailsReplied', '2026-11-02T12:00:00.000Z', '<p>Hi Jonathan, timing is good.<br>Can you send two profiles first?</p>', 'Re: Your Head of IT search')]);
+        $conv('ctc_it05', 'lea_it05', 'Mia Meeting', ['email'], true, ['lbl_interest1'], [
+            $msg('emailsSent', '2026-11-02T08:15:00.000Z', '<p>Hi Mia, we place IT people in Belgium.</p>', 'Your IT Director search'),
+            $msg('emailsReplied', '2026-11-03T09:00:00.000Z', '<p>Yes, let us talk next week.</p>')]);
+        $conv('ctc_hr02', 'lea_hr02', 'Cas Connected', ['linkedin'], false, [], [
+            $msg('linkedinSent', '2026-11-07T18:05:00.000Z', 'Thanks for connecting, Cas!'),
+            $msg('linkedinReplied', '2026-11-08T08:30:00.000Z', 'Interesting. Call me this week, mornings are best.')]);
+        $conv('ctc_ext01', '', 'Alex Outsider', ['email'], true, [], [
+            $msg('emailsReplied', '2026-11-05T10:00:00.000Z', '<p>Saw your post, do you also do contract roles?</p>')]);
+    }
+
+    /** Local mock mode only: keep tasks, calls, inbox and labels across requests in a JSON file (tests stay in memory). */
+    public function persist(string $file): void
+    {
+        $this->stateFile = $file;
+        $d = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
+        if (is_array($d)) foreach (['tasks', 'callLog', 'inbox', 'labels', 'sent'] as $k) if (isset($d[$k]) && is_array($d[$k])) $this->$k = $d[$k];
+    }
+
+    private function save(): void
+    {
+        if ($this->stateFile === null) return;
+        @file_put_contents($this->stateFile, json_encode(['tasks' => $this->tasks, 'callLog' => $this->callLog, 'inbox' => $this->inbox, 'labels' => $this->labels, 'sent' => array_slice($this->sent, -50)]), LOCK_EX);
+    }
+
+    private function taskIndex(string $id): ?int
+    {
+        foreach ($this->tasks as $i => $t) if ($t['_id'] === $id) return $i;
+        return null;
+    }
+
+    /** POST /calls, PATCH /tasks, POST /tasks/ignore and the inbox, with lemlist's error codes. */
+    private function callsTab(string $method, string $path, array $q, array $b, callable $ok): ?array
+    {
+        $err = fn (int $s, string $code, string $m) => $ok(['success' => false, 'error' => ['code' => $code, 'message' => $m]], $s);
+        if ($method === 'POST' && $path === '/calls') {
+            if (!$this->callsApi) return $err(402, 'PLAN', 'The team plan does not include the calls API');
+            $ext = (string) ($b['externalId'] ?? '');
+            if (isset($this->callLog[$ext])) return $ok(['success' => true, 'data' => $this->callLog[$ext]], 200); // replay: never twice
+            if (($b['userId'] ?? '') !== self::USER) return $err(400, 'CALLS_API_USER_NOT_IN_TEAM', 'userId is not a member of the team');
+            $keys = ['connected-positive', 'connected-neutral', 'connected-negative', 'voicemail', 'gatekeeper', 'busy', 'no-answer', 'wrong-number', 'not-in-service'];
+            if (isset($b['callStatus']) && !in_array($b['callStatus'], $keys, true)) return $err(400, 'CALLS_UNKNOWN_CALL_STATUS', 'Unknown call status');
+            $lead = $b['leadId'] ?? null;
+            if (isset($b['taskId'])) {
+                $i = $this->taskIndex((string) $b['taskId']);
+                if ($i === null) return $err(404, 'CALLS_API_TASK_NOT_FOUND', 'Task not found');
+                if ($this->tasks[$i]['type'] !== 'phone') return $err(400, 'CALLS_API_TASK_NOT_A_CALL', 'taskId is not a call task: only a call task can be completed by a call.');
+                if (!in_array($this->tasks[$i]['status'], ['due', 'upcoming', 'paused'], true)) return $err(409, 'CALLS_API_TASK_ALREADY_CLOSED', 'taskId is already done');
+                $this->tasks[$i]['status'] = 'done';
+                $lead = $this->tasks[$i]['leadId'];
+            }
+            $id = 'act_call' . substr(md5($ext), 0, 10);
+            $this->callLog[$ext] = ['_id' => $id, 'externalId' => $ext, 'leadId' => $lead, 'taskId' => $b['taskId'] ?? null, 'userId' => $b['userId'], 'direction' => 'outbound',
+                'callStatus' => $b['callStatus'] ?? null, 'phoneProvider' => 'api', 'provider' => $b['provider'] ?? null, 'createdAt' => $b['startedAt'] ?? null];
+            return $ok(['success' => true, 'data' => $this->callLog[$ext]], 201);
+        }
+        if ($method === 'PATCH' && $path === '/tasks') {
+            $i = $this->taskIndex((string) ($b['id'] ?? ''));
+            if ($i === null) return $err(404, 'NOT_FOUND', 'Task not found');
+            if (!empty($b['done'])) $this->tasks[$i]['status'] = 'done';
+            if (isset($b['dueDate'])) { $this->tasks[$i]['dueDate'] = $b['dueDate']; $this->tasks[$i]['status'] = 'upcoming'; }
+            return $ok(['_id' => $this->tasks[$i]['_id'], 'type' => $this->tasks[$i]['type'], 'dueDate' => $this->tasks[$i]['dueDate']]);
+        }
+        if ($method === 'POST' && $path === '/tasks/ignore') {
+            foreach ((array) ($b['ids'] ?? []) as $id) { $i = $this->taskIndex((string) $id); if ($i !== null) $this->tasks[$i]['status'] = 'ignored'; }
+            return $ok(['ok' => true]);
+        }
+        if ($method === 'GET' && $path === '/inbox/labels') return $ok($this->labels);
+        if ($method === 'POST' && $path === '/inbox/labels') {
+            foreach ($this->labels as $l) if ($l['name'] === ($b['labelName'] ?? '')) return $ok(['error' => 'Label with this name already exists'], 409);
+            $l = ['_id' => 'lbl_' . substr(md5((string) $b['labelName']), 0, 9), 'name' => (string) $b['labelName'], 'color' => '#888888', 'createdBy' => 'jonathan@swooscale.com'];
+            $this->labels[] = $l;
+            return $ok($l);
+        }
+        if ($method === 'GET' && $path === '/inbox') {
+            if (($q['userId'] ?? '') === '') return $ok(['error' => 'User ID is required'], 400);
+            $data = [];
+            foreach ($this->inbox as $c) {
+                $row = array_diff_key($c, ['thread' => 1]) + ['messages' => [array_map(fn ($m) => $m, end($c['thread']))]];
+                $row['messages'] = [['_id' => end($c['thread'])['_id'], 'body' => end($c['thread'])['message'], 'sentAt' => end($c['thread'])['createdAt']]];
+                if (!$this->returnLabels) unset($row['labels']);
+                $data[] = $row;
+            }
+            return $ok(['data' => $data, 'pagination' => ['totalItems' => count($data), 'currentPage' => 1, 'totalPages' => 1]]);
+        }
+        if ($method === 'GET' && preg_match('~^/inbox/(ctc_[A-Za-z0-9]+)$~', $path, $m)) {
+            if (!isset($this->inbox[$m[1]])) return $ok(['data' => [], 'pagination' => ['totalItems' => 0]]);
+            if (($q['markAsRead'] ?? '') === 'true') {
+                if (($q['userId'] ?? '') === '') return $ok(['error' => 'User ID is required to mark as read'], 400);
+                $this->inbox[$m[1]]['users'][0]['read'] = true;
+            }
+            return $ok(['data' => $this->inbox[$m[1]]['thread'], 'pagination' => ['totalItems' => count($this->inbox[$m[1]]['thread'])]]);
+        }
+        if ($method === 'POST' && preg_match('~^/inbox/conversations/labels/(ctc_[A-Za-z0-9]+)$~', $path, $m)) {
+            if (!isset($this->inbox[$m[1]])) return $ok(['error' => 'Inbox not found'], 404);
+            $known = array_column($this->labels, '_id');
+            foreach ((array) $b['labelIds'] as $id) if (!in_array($id, $known, true)) return $ok(['error' => 'Label not found'], 404);
+            $this->inbox[$m[1]]['labels'] = $b['appendLabels'] ? array_values(array_unique(array_merge($this->inbox[$m[1]]['labels'], $b['labelIds']))) : array_values($b['labelIds']);
+            return $ok(['ok' => true]);
+        }
+        if ($method === 'POST' && ($path === '/inbox/email' || $path === '/inbox/linkedin')) {
+            $ctc = (string) ($b['contactId'] ?? '');
+            if (!isset($this->inbox[$ctc])) return $ok(['error' => 'Lead not found'], 400);
+            if ($path === '/inbox/email' && ($b['sendUserMailboxId'] ?? '') !== 'usm_mockmailbox1') return $ok(['error' => 'Invalid sendUserMailboxId'], 400);
+            $this->sent[] = ['channel' => $path === '/inbox/email' ? 'email' : 'linkedin', 'contactId' => $ctc];
+            $this->inbox[$ctc]['thread'][] = ['_id' => 'act_r' . substr(md5((string) count($this->sent)), 0, 10), 'type' => $path === '/inbox/email' ? 'emailsSent' : 'linkedinSent',
+                'createdAt' => gmdate('Y-m-d\TH:i:s.000\Z'), 'message' => (string) $b['message'], 'sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins'];
+            return $ok(['ok' => true, 'contactId' => $ctc]);
+        }
+        return null;
     }
 
     public function __invoke(string $method, string $url, array $headers, ?string $body): array
@@ -177,6 +316,8 @@ final class MockLemlist
             return $ok(['results' => $items, 'total' => count($f), 'limit' => $limit, 'page' => $page]);
         }
         if ($method === 'GET' && $path === '/hooks') return $ok(array_values($this->hooks));
+        $r = $this->callsTab($method, $path, $q, $b, $ok);
+        if ($r !== null) { $this->save(); return $r; }
         if ($method === 'POST' && $path === '/hooks') {
             foreach ($this->hooks as $h) if ($h['targetUrl'] === ($b['targetUrl'] ?? '')) return $ok(['error' => 'A webhook with this targetUrl already exists'], 409);
             $id = 'hok_' . substr(md5((string) ($b['targetUrl'] ?? '')), 0, 12);

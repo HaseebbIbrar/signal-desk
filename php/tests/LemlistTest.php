@@ -70,12 +70,16 @@ function t_lem_config(array $extra = []): array
 test('lemlist guard: reads allowed; writes ONLY on the explicit list, with their body rules; everything else refused before any request', function () {
     foreach (['/team', '/campaigns', '/campaigns/cam_abc123/sequences', '/v2/campaigns/cam_abc123/stats', '/v2/campaigns/cam_abc123/export/leads', '/activities', '/v2/tasks',
         '/call-statuses', '/calls/sd-call-123', '/inbox', '/inbox/ctc_abc123', '/inbox/labels', '/hooks', '/users/usr_abc123', '/user/channels'] as $p) LemlistGuard::assert('GET', $p);
-    eq('POST /calls', LemlistGuard::assert('POST', '/calls', ['externalId' => 'x']));
+    $call = ['externalId' => 'sd-1-ab', 'userId' => 'usr_abc123', 'direction' => 'outbound', 'startedAt' => '2026-11-16T10:00:00Z', 'callStatus' => 'no-answer', 'provider' => 'signal-desk'];
+    eq('POST /calls', LemlistGuard::assert('POST', '/calls', $call + ['taskId' => 'opp_1']));
+    LemlistGuard::assert('POST', '/calls', $call + ['leadId' => 'lea_1', 'note' => 'call back Monday']);
     eq('PATCH /tasks', LemlistGuard::assert('PATCH', '/tasks', ['id' => 'opp_1', 'done' => true]));
     eq('PATCH /tasks', LemlistGuard::assert('PATCH', '/tasks', ['id' => 'opp_1', 'dueDate' => '2026-11-20T09:00:00Z']));
     LemlistGuard::assert('POST', '/tasks/ignore', ['ids' => ['opp_1']]);
-    LemlistGuard::assert('POST', '/inbox/email', ['message' => 'x']);
-    LemlistGuard::assert('POST', '/inbox/linkedin', ['message' => 'x']);
+    $email = ['sendUserId' => 'usr_abc123', 'sendUserEmail' => 'j@x.test', 'sendUserMailboxId' => 'usm_1', 'contactId' => 'ctc_1', 'message' => '<p>x</p>', 'replyToActivityId' => 'latest'];
+    LemlistGuard::assert('POST', '/inbox/email', $email);
+    $li = ['sendUserId' => 'usr_abc123', 'leadId' => 'lea_1', 'contactId' => 'ctc_1', 'message' => 'x'];
+    LemlistGuard::assert('POST', '/inbox/linkedin', $li);
     LemlistGuard::assert('POST', '/inbox/conversations/labels/ctc_abc123', ['labelIds' => ['l1'], 'appendLabels' => true]);
     foreach (LemlistGuard::LABELS as $l) LemlistGuard::assert('POST', '/inbox/labels', ['labelName' => $l]);
     LemlistGuard::assert('POST', '/hooks', ['targetUrl' => 'https://x'], true);
@@ -86,6 +90,16 @@ test('lemlist guard: reads allowed; writes ONLY on the explicit list, with their
         ['POST', '/hooks', ['targetUrl' => 'https://x']], ['DELETE', '/hooks/hok_abc123', []], ['DELETE', '/leads/lea_abc123', []], ['POST', '/campaigns/cam_abc/leads/x@y.z', []],
         ['POST', '/campaigns/cam_abc123/pause', []], ['PATCH', '/calls/act_abc123', []], ['POST', '/tasks', []], ['POST', '/inbox/sms', []], ['PUT', '/tasks', []],
         ['GET', '/team/credits', null], ['GET', '/campaigns/../hooks', null], ['DELETE', '/activities/act_abc123/recording-transcript', []],
+        // Phase 3 body rules: exactly our fields, nothing else
+        ['POST', '/calls', ['externalId' => 'x']], ['POST', '/calls', $call], ['POST', '/calls', $call + ['taskId' => 'opp_1', 'leadId' => 'lea_1']],
+        ['POST', '/calls', $call + ['taskId' => 'opp_1', 'recordingUrl' => 'https://x']], ['POST', '/calls', $call + ['taskId' => 'opp_1', 'transcript' => 'x']],
+        ['POST', '/calls', $call + ['taskId' => 'opp_1', 'phone' => '+32']], ['POST', '/calls', ['direction' => 'inbound'] + $call + ['taskId' => 'opp_1']],
+        ['POST', '/calls', ['externalId' => '-bad id'] + $call + ['taskId' => 'opp_1']],
+        ['POST', '/inbox/email', array_diff_key($email, ['replyToActivityId' => 1])], ['POST', '/inbox/email', ['replyToActivityId' => 'act_x'] + $email],
+        ['POST', '/inbox/email', $email + ['attachments' => [['url' => 'x']]]], ['POST', '/inbox/email', $email + ['cc' => ['a@b.c']]], ['POST', '/inbox/email', $email + ['subject' => 'x']],
+        ['POST', '/inbox/email', ['message' => ''] + $email], ['POST', '/inbox/linkedin', $li + ['campaignId' => 'cam_1']], ['POST', '/inbox/linkedin', array_diff_key($li, ['leadId' => 1])],
+        ['POST', '/inbox/conversations/labels/ctc_abc123', ['labelIds' => ['l1'], 'appendLabels' => 'yes']], ['POST', '/inbox/conversations/labels/ctc_abc123', ['labelIds' => ['l1']]],
+        ['POST', '/inbox/labels', ['labelName' => 'Meeting', 'color' => '#fff']], ['POST', '/tasks/ignore', ['ids' => ['opp_1', 'opp_2']]],
     ];
     foreach ($refused as [$m, $p, $b]) throws(fn () => LemlistGuard::assert($m, $p, $b), ForbiddenWriteError::class);
     [$c, , $mock] = t_lem();
@@ -109,7 +123,8 @@ test('lemlist client: Basic auth with an empty user, waits on Retry-After for 42
     $mock->callsApi = false;
     eq('LEMLIST_PLAN', throws(fn () => $c->get('/call-statuses'), AppError::class, 'Calls API needs Email Pro+')->errCode);
     $mock->queue = [['status' => 409, 'headers' => [], 'body' => '{"success":false,"error":{"code":"CALLS_API_TASK_ALREADY_CLOSED","message":"taskId is already done"}}']];
-    eq('CALLS_API_TASK_ALREADY_CLOSED', throws(fn () => $c->write('POST', '/calls', ['externalId' => 'sd-1', 'note' => 'secret note text']), AppError::class)->errCode);
+    eq('CALLS_API_TASK_ALREADY_CLOSED', throws(fn () => $c->write('POST', '/calls', ['externalId' => 'sd-1', 'userId' => MockLemlist::USER, 'direction' => 'outbound',
+        'startedAt' => '2026-11-16T10:00:00Z', 'callStatus' => 'no-answer', 'taskId' => 'opp_call0001', 'note' => 'secret note text']), AppError::class)->errCode);
     $log = json_encode($GLOBALS['__events']);
     ok(!str_contains($log, 'mock-key') && !str_contains($log, 'secret note text'), 'no key and no body in the audit log');
     ok(str_contains($log, '"endpoint":"POST \/calls"'));
@@ -150,8 +165,9 @@ test('lemlist sync: team, call statuses, running campaigns only, steps incl. con
     eq(['in/example-ciso', 'ciso.example@mail.example', 'Example MSSP'], [$l['linkedin_key'], $l['email'], $l['company']]);
     eq(count($mock->activities), (int) $store->one('SELECT COUNT(*) FROM activities'));
     ok(count(array_filter($mock->calls, fn ($c) => $c[1] === '/activities')) >= 3, 'activities read in pages of 100');
-    eq(['opp_call0001', 'opp_lis00001', 'opp_man00001'], array_column($store->all("SELECT id FROM tasks WHERE status IN ('due','upcoming','paused') ORDER BY id"), 'id'), 'open tasks only');
-    eq('+32 470 00 0' . substr(md5('lea_it01'), 0, 3), $store->one("SELECT phone FROM leads WHERE lead_id = 'lea_it01'"), 'the lead phone from the export is kept');
+    eq(['opp_call0001', 'opp_call0002', 'opp_call0003', 'opp_eml00001', 'opp_fin00001', 'opp_lis00001', 'opp_man00001', 'opp_ooo00001', 'opp_vis00001'],
+        array_column($store->all("SELECT id FROM tasks WHERE status IN ('due','upcoming','paused') ORDER BY id"), 'id'), 'open tasks only');
+    eq('+32 470 00 ' . sprintf('%02d %02d', crc32('lea_it01') % 100, crc32(strrev('lea_it01')) % 100), $store->one("SELECT phone FROM leads WHERE lead_id = 'lea_it01'"), 'the lead phone from the export is kept');
     eq(9, (int) $store->one('SELECT COUNT(*) FROM call_statuses'));
     eq(['yes', 'Email Pro'], [$store->meta('calls_api'), $store->meta('plan')]);
     eq(2, json_decode((string) $store->one("SELECT data FROM stats WHERE campaign_id = 'cam_it000001'"), true)['replied']);

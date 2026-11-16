@@ -66,7 +66,38 @@ final class LemlistGuard
         }
         if ($op === null) throw new ForbiddenWriteError("Refused: Signal Desk never sends $method $path to lemlist");
         $body ??= [];
+        $keys = array_keys($body);
+        $only = function (array $allowed, array $required) use ($keys, $op): void {
+            $extra = array_diff($keys, $allowed);
+            $missing = array_diff($required, $keys);
+            if ($extra || $missing) throw new ForbiddenWriteError("Refused: $op" . ($extra ? ' does not take ' . implode(', ', $extra) : '') . ($missing ? ' needs ' . implode(', ', $missing) : ''));
+        };
+        $text = fn ($v, int $max) => is_string($v) && $v !== '' && mb_strlen($v) <= $max;
         switch ($op) {
+            case 'POST /calls':
+                // our own call log only: no recordings, transcripts, numbers or emails
+                $only(['externalId', 'userId', 'direction', 'startedAt', 'callStatus', 'note', 'provider', 'duration', 'taskId', 'leadId', 'contactId'], ['externalId', 'userId', 'direction', 'startedAt', 'callStatus']);
+                $refs = array_intersect($keys, ['taskId', 'leadId', 'contactId']);
+                if (count($refs) !== 1 || !preg_match('/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/', (string) $body['externalId']) || ($body['direction'] ?? '') !== 'outbound'
+                    || !preg_match('/^usr_[A-Za-z0-9]+$/', (string) $body['userId']) || (isset($body['note']) && !$text($body['note'], 2000))) {
+                    throw new ForbiddenWriteError('Refused: POST /calls needs one of taskId/leadId/contactId, an outbound call by a usr_ and a valid externalId');
+                }
+                break;
+            case 'POST /inbox/email':
+                // replies in an existing thread only (no new emails, no CC, no attachments)
+                $only(['sendUserId', 'sendUserEmail', 'sendUserMailboxId', 'contactId', 'message', 'replyToActivityId'], ['sendUserId', 'sendUserEmail', 'sendUserMailboxId', 'contactId', 'message', 'replyToActivityId']);
+                if ($body['replyToActivityId'] !== 'latest' || !$text($body['message'], 30000)) throw new ForbiddenWriteError('Refused: POST /inbox/email is a reply to the latest thread message only');
+                break;
+            case 'POST /inbox/linkedin':
+                $only(['sendUserId', 'leadId', 'contactId', 'message'], ['sendUserId', 'leadId', 'contactId', 'message']);
+                if (!$text($body['message'], 8000)) throw new ForbiddenWriteError('Refused: POST /inbox/linkedin needs a message');
+                break;
+            case 'POST /inbox/conversations/labels/{id}':
+                $only(['labelIds', 'appendLabels'], ['labelIds', 'appendLabels']);
+                if (!is_bool($body['appendLabels']) || !is_array($body['labelIds']) || count($body['labelIds']) > 20 || array_filter($body['labelIds'], fn ($l) => !is_string($l) || $l === '')) {
+                    throw new ForbiddenWriteError('Refused: labels are {labelIds: [ids], appendLabels: bool}');
+                }
+                break;
             case 'PATCH /tasks':
                 $keys = array_keys($body);
                 sort($keys);
@@ -75,10 +106,10 @@ final class LemlistGuard
                 if (!is_string($body['id'] ?? null) || (!$done && !$snooze)) throw new ForbiddenWriteError('Refused: PATCH /tasks may only set done:true or a dueDate');
                 break;
             case 'POST /tasks/ignore':
-                if (array_keys($body) !== ['ids'] || !is_array($body['ids']) || !$body['ids'] || count($body['ids']) > 100) throw new ForbiddenWriteError('Refused: POST /tasks/ignore takes {ids} only');
+                if (array_keys($body) !== ['ids'] || !is_array($body['ids']) || count($body['ids']) !== 1 || !is_string($body['ids'][0])) throw new ForbiddenWriteError('Refused: POST /tasks/ignore skips one task: {ids: [id]}');
                 break;
             case 'POST /inbox/labels':
-                if (!in_array($body['labelName'] ?? null, self::LABELS, true)) throw new ForbiddenWriteError('Refused: only the labels ' . implode(', ', self::LABELS) . ' may be created');
+                if (array_keys($body) !== ['labelName'] || !in_array($body['labelName'] ?? null, self::LABELS, true)) throw new ForbiddenWriteError('Refused: only the labels ' . implode(', ', self::LABELS) . ' may be created');
                 break;
             case 'POST /hooks':
             case 'DELETE /hooks/{id}':
@@ -223,6 +254,11 @@ SQL);
         // added in Phase 2: campaigns that stop running are hidden but keep their history
         $cols = array_column($this->db->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name');
         if (!in_array('running', $cols, true)) $this->db->exec('ALTER TABLE campaigns ADD COLUMN running INTEGER DEFAULT 1');
+        // added in Phase 3: resumable call logs (call logged, then the task updated)
+        $cols = array_column($this->db->query('PRAGMA table_info(calls)')->fetchAll(), 'name');
+        foreach (['answered INTEGER', 'task_done INTEGER', 'callback_at TEXT', 'kind TEXT'] as $col) {
+            if (!in_array(explode(' ', $col)[0], $cols, true)) $this->db->exec("ALTER TABLE calls ADD COLUMN $col");
+        }
     }
 
     public function meta(string $key, mixed $default = null): mixed

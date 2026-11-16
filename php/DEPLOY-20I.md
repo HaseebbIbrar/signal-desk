@@ -435,6 +435,34 @@ Click a lead for its timeline (signal found → approval → pushed → every st
 
 **Known limits:** lemlist's API has no activity for calls logged through the API, so call numbers come from lemlist's dialer events plus the calls Signal Desk logs (Calls tab). The "lemlist ↗" link opens the campaign; lemlist has no public link format for a single lead.
 
+## lemlist — Phase 3: the Calls tab (SDR desk)
+
+**Calls** in the top bar (its number = open call and manual tasks due) opens the SDR desk, in the same mockup design: **Call tasks**, **Manual tasks** and **Inbox**.
+
+**1. config.php: the kill switch**
+```php
+'LEMLIST_WRITES' => 'off',   // default. 'on' after testing: calls, tasks, replies and labels are sent to lemlist
+```
+With `'off'` the whole tab works in **preview mode**: every button runs all the checks and shows what it *would* send (for example "POST /calls + PATCH /tasks"), but nothing reaches lemlist, nothing changes in Signal Desk, and threads are not marked as read. `/health.php` shows the setting.
+
+**2. Who can act:** only logins in `LEMLIST_SENDER_ALLOWED`, and always as `LEMLIST_SHARED_SENDER` (Jonathan). Every send and call log says **"Sending as Jonathan Perkins (jonathan@swooscale.com)"**. Anyone else sees the tab in view-only mode. The audit log records the real Signal Desk user, the action and the task/lead/contact ids (never message text or notes).
+
+**Call tasks:** lemlist phone tasks plus manual tasks titled "Call…", "Calling again…" or "Final call…", overdue first. "Now calling" shows the last email/LinkedIn events, the Atlas count, the linked signal, a phone (tel:) link and LinkedIn. Answered / Not answered → the outcome (your lemlist call statuses, read live) → note → optional call-back date → **Save & complete task in lemlist**, and the next call opens.
+- Phone task: the call is logged on the task (lemlist completes it and the sequence moves on).
+- Manual call task: the call is logged on the lead, then the task is marked done.
+- Call-back date: the call is logged on the lead and the task moves to that date (09:00 Brussels), so it stays open.
+- A double click or a retry never logs a call twice (each attempt has its own id). If someone else completed the task, the queue refreshes. "Done today" counts the calls logged here.
+
+**Manual tasks:** the other manual steps, with filters. Message steps show the campaign step text with the lead's details filled in (**approximate preview**: lemlist sends the step as it is in the campaign). **Send** asks for confirmation, then lemlist sends the step. **Done** closes other tasks, **Skip** ignores the task in lemlist, and call-type tasks have **Log call**.
+
+**Inbox:** your lemlist conversations (All / Unread / Interested / Meeting); opening one marks it read. Labels: only our 4 (Interested, Meeting, Not interested, Out of office); other labels on the conversation are kept; missing ones are created if Jonathan is a lemlist admin. Reply by **Email** (in the same thread, from Jonathan's lemlist mailbox) or **LinkedIn** (campaign leads only), after a confirmation, without attachments. New replies show up live through the webhook (with a 60-second refresh as a fallback).
+
+**Limits per user and hour:** 30 messages sent, 100 calls logged, 200 task changes, 100 label changes.
+
+**Outreach numbers:** calls logged here count as calls and conversations; a positive call sets the lead to Interested (negative: Not interested); the Interested / Meeting / Not interested labels set the same outcomes.
+
+**Calls API:** logging calls needs lemlist **Email Pro or above**. Without it the tab says so, and manual tasks and the inbox keep working.
+
 ## What the app writes
 
 | Tab | Allowed writes |
@@ -488,6 +516,10 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 | "Refresh from Atlas" says wait | It can be used once a minute. New lists are also picked up automatically every hour. |
 | "Atlas: busy, try later" | Atlas's rate limit was reached. Badges retry on the next page load, and counts are cached for 6 hours. |
 | The Verified page or badges look out of date after an upload | 20i caches `/assets/*`. The pages use versioned asset URLs (`?v=`), so make sure your SFTP client sets the upload time; then reload. |
+| The Calls tab says "Preview mode" | `LEMLIST_WRITES` is `off` (the default): nothing is sent. Set `'LEMLIST_WRITES' => 'on'` in `config.php` when you are ready. |
+| "View only" on the Calls tab | Your login email is not in `LEMLIST_SENDER_ALLOWED`. |
+| "Limit reached: at most 30 messages sent per hour" | The per-user hourly limit. Wait a bit, or ask for a higher limit. |
+| "This task is already closed in lemlist" | Someone completed it in lemlist (or the dialer) meanwhile. The queue refreshed; nothing was logged twice. |
 | Outreach shows "No running lemlist campaigns yet" | The lemlist cron hasn't run since the upload, or no campaign is running. Wait for the next run (every 15 minutes) and check `/health.php`. |
 | A campaign is missing from the Outreach picker | Only running campaigns are shown. Restart it in lemlist (it comes back with its history at the next sync) or set `'LEMLIST_SHOW_STOPPED' => 'true'`. |
 | Outreach shows New jobs / Deals / New clients as 0 | They come from Atlas once an hour and match the lead's company name; check the Atlas rows on `/health.php` and that the company is spelled the same in Atlas. |

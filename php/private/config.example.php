@@ -74,4 +74,7 @@ return [
     'LEMLIST_ATTRIBUTION' => 'first_positive',
     // Outreach shows RUNNING campaigns only. 'true' also shows stopped ones (their history is kept for 12 months either way).
     'LEMLIST_SHOW_STOPPED' => 'false',
+    // Calls tab kill switch. 'off' (default) = preview mode: every action is checked and shown, but NOTHING is sent to lemlist.
+    // Switch to 'on' after testing: calls are logged, tasks completed/skipped, replies sent and labels set in lemlist.
+    'LEMLIST_WRITES' => 'off',
 ];

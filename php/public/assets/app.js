@@ -1052,15 +1052,390 @@
     var sy = el.getAttribute("data-synced");
     el.title = "lemlist webhook events arrive live; the full sync runs every 15 minutes" + (sy ? " (last sync " + new Date(/^\d+$/.test(sy) ? Number(sy) * 1000 : Date.parse(sy)).toLocaleString("en-GB") + ")" : "");
   }
-  function callsPage() {
-    clear(app);
-    app.appendChild(h("div", { class: "sd-o sd-o-stack" },
-      h("div", { class: "sd-o-titlebar" }, h("h1", { class: "sd-o-h1", text: "SDR desk" })),
-      h("section", { class: "sd-card sd-o-pad sd-o-stack-s sd-c-call sd-o-topline", "aria-label": "Calls" },
-        h("h2", { class: "sd-o-h2", text: "Calls: coming soon" }),
-        h("span", { class: "sd-muted sd-o-text", text: "Call tasks, manual tasks and the lemlist inbox arrive here in the next phase. The number on the tab is today's open call and manual tasks in lemlist." }),
-        h("div", { class: "sd-o-wrap" }, h("a", { href: "/outreach", class: "sd-btn sd-btn-link", text: "Go to Outreach" })))));
+  // ================================================================ Calls tab (SDR desk): call tasks, manual tasks, inbox
+  // Layout and look follow the approved mockup (signal-desk-design/outreach-mockup.dc.html, Calls tab). Everything acts as the
+  // shared lemlist sender; LEMLIST_WRITES=off = preview mode (the server answers what it WOULD send). No inline styles (CSP).
+  function confirmDialog(title, text, okLabel) {
+    return new Promise(function (resolve) {
+      var dlg = h("dialog", { class: "sd-k-dialog", "aria-labelledby": "sd-k-dialog-title" });
+      var done = function (v) { try { dlg.close(); } catch (e) { /* ignore */ } dlg.remove(); resolve(v); };
+      dlg.appendChild(h("div", { class: "sd-o-stack-s" },
+        h("h2", { id: "sd-k-dialog-title", class: "sd-o-h2", text: title }),
+        h("p", { class: "sd-k-dialog-text", text: text }),
+        h("div", { class: "sd-k-dialog-actions" },
+          h("button", { type: "button", class: "sd-btn", onclick: function () { done(false); }, text: "Cancel" }),
+          h("button", { type: "button", class: "sd-btn sd-btn-on", onclick: function () { done(true); }, text: okLabel }))));
+      dlg.addEventListener("cancel", function (e) { e.preventDefault(); done(false); });
+      document.body.appendChild(dlg);
+      if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
+      dlg.querySelector(".sd-btn").focus();
+    });
   }
+  function callsPage() {
+    var subs = ["calls", "manual", "inbox"];
+    var q0 = new URLSearchParams(window.location.search);
+    var st = { sub: subs.indexOf(q0.get("sub")) >= 0 ? q0.get("sub") : "calls", data: null, error: null, msg: null, sel: null, ans: null, res: null, note: "", cb: "",
+      attempt: newAttempt(), caller: "", logged: {}, mFilter: "all", mDone: {}, busy: false,
+      inbox: { filter: "all", list: null, unread: 0, sel: null, thread: null, ch: "email", draft: "", loading: false, sent: [] }, seen: {} };
+    var MT = { call: ["Call again", "sd-c-call"], li: ["LinkedIn message", "sd-c-message"], email: ["Email to review", "sd-c-email"], ooo: ["Out of office", "sd-c-fin"],
+      visit: ["LinkedIn visit", "sd-c-invite"], task: ["Task", "sd-c-muted"] };
+    var MF = [["all", "All"], ["call", "Calls"], ["li", "LinkedIn"], ["email", "Email"], ["ooo", "Out of office"], ["visit", "LinkedIn visit"], ["task", "Other"]];
+    var LBL = { Interested: "sd-c-int", Meeting: "sd-c-meet", "Not interested": "sd-c-bnc", "Out of office": "sd-c-fin" };
+    var root = h("div", { class: "sd-o sd-o-stack" });
+    clear(app);
+    app.appendChild(root);
+
+    function newAttempt() {
+      var a = new Uint8Array(8);
+      (window.crypto || window.msCrypto).getRandomValues(a);
+      return Array.prototype.map.call(a, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+    }
+    function tz(d, o) { return d.toLocaleString("en-GB", Object.assign({ timeZone: "Europe/Brussels" }, o)); }
+    function dayKey(d) { return tz(d, { year: "numeric", month: "2-digit", day: "2-digit" }); }
+    function when(iso) {
+      if (!iso) return "";
+      var d = new Date(iso), now = new Date();
+      if (dayKey(d) === dayKey(now)) return tz(d, { hour: "2-digit", minute: "2-digit" });
+      if (dayKey(d) === dayKey(new Date(now.getTime() - 86400000))) return "Yesterday";
+      return tz(d, { day: "numeric", month: "short" });
+    }
+    function whenLong(iso) { return iso ? (dayKey(new Date(iso)) === dayKey(new Date()) ? "Today " + tz(new Date(iso), { hour: "2-digit", minute: "2-digit" }) : tz(new Date(iso), { day: "numeric", month: "short" }) + " " + tz(new Date(iso), { hour: "2-digit", minute: "2-digit" })) : ""; }
+    function due(t) {
+      if (!t.dueDate) return { text: "No due date", late: false };
+      var d = new Date(t.dueDate), now = new Date();
+      var days = Math.round((new Date(dayKey(now)) - new Date(dayKey(d))) / 86400000);
+      if (d <= now) return days >= 1 ? { text: "Overdue " + days + (days === 1 ? " day" : " days"), late: true } : { text: "Due now", late: false };
+      if (days === 0) return { text: "Due " + tz(d, { hour: "2-digit", minute: "2-digit" }), late: false };
+      if (days === -1) return { text: "Tomorrow", late: false };
+      return { text: tz(d, { weekday: "short", day: "numeric", month: "short" }), late: false };
+    }
+    function pill(text, cls) { return h("span", { class: "sd-pill sd-pill-fill " + cls, text: text }); }
+    function btn(label, on, onclick, extra) {
+      var b = h("button", { type: "button", class: "sd-btn" + (on ? " sd-btn-on" : "") + (extra ? " " + extra : ""), onclick: onclick, text: label });
+      if (on !== null) b.setAttribute("aria-pressed", on ? "true" : "false");
+      return b;
+    }
+    function say(kind, text) { st.msg = { kind: kind, text: text }; render(); }
+    function previewText(r) {
+      return r.message + (r.wouldSend ? " It would send: " + r.wouldSend.map(function (w) { return w.request + " (" + w.fields.join(", ") + ")"; }).join(" + ") + "." : "");
+    }
+
+    function load() {
+      return api("/api/calls").then(function (d) {
+        st.data = d; st.error = null;
+        var open = d.queue.filter(function (q) { return !st.logged[q.id]; });
+        if (!st.sel || !d.queue.some(function (q) { return q.id === st.sel; })) { st.sel = open.length ? open[0].id : null; resetCall(); }
+        var b = document.querySelector(".sd-top-badge");
+        if (b) b.textContent = String(d.counts.badge);
+      }, function (e) { st.error = e.message; }).then(render);
+    }
+    function loadInbox(keepThread) {
+      st.inbox.loading = !st.inbox.list;
+      return api("/api/calls/inbox?filter=" + encodeURIComponent(st.inbox.filter)).then(function (d) {
+        st.inbox.list = d.conversations; st.inbox.unread = d.unread; st.inbox.loading = false;
+        if (!st.inbox.sel && d.conversations.length) openThread(d.conversations[0].contactId);
+        else if (keepThread && st.inbox.sel) openThread(st.inbox.sel, true);
+      }, function (e) { st.inbox.loading = false; st.inbox.error = e.message; }).then(render);
+    }
+    function openThread(contactId, quiet) {
+      if (!quiet) { st.inbox.sel = contactId; st.inbox.thread = null; st.inbox.draft = ""; render(); }
+      return api("/api/calls/thread?contactId=" + encodeURIComponent(contactId)).then(function (t) {
+        if (st.inbox.sel !== contactId) return;
+        st.inbox.thread = t;
+        if (!t.canLinkedin) st.inbox.ch = "email";
+        else if (!quiet) { var c = (st.inbox.list || []).filter(function (x) { return x.contactId === contactId; })[0]; st.inbox.ch = c && c.channel === "linkedin" ? "linkedin" : "email"; }
+        if (t.markedRead) (st.inbox.list || []).forEach(function (x) { if (x.contactId === contactId && x.unread) { x.unread = false; st.inbox.unread = Math.max(0, st.inbox.unread - 1); } });
+      }, function (e) { st.inbox.error = e.message; }).then(render);
+    }
+    function resetCall() { st.ans = null; st.res = null; st.note = ""; st.cb = ""; st.attempt = newAttempt(); }
+    function setSub(s) {
+      st.sub = s; st.msg = null;
+      try { window.history.replaceState(null, "", "/calls" + (s === "calls" ? "" : "?sub=" + s)); } catch (e) { /* ignore */ }
+      if (s === "inbox" && !st.inbox.list) loadInbox();
+      render();
+    }
+
+    // ---------------------------------------------------------- header with the three sub-tabs
+    function header() {
+      var d = st.data;
+      var tabs = [["calls", "Call tasks", d ? d.counts.calls : ""], ["manual", "Manual tasks", d ? d.counts.manual : ""], ["inbox", "Inbox", st.inbox.unread ? st.inbox.unread + " new" : ""]];
+      return h("div", { class: "sd-o-titlebar" }, h("h1", { class: "sd-o-h1", text: "SDR desk" }),
+        h("div", { class: "sd-o-group", role: "group", "aria-label": "Section" }, tabs.map(function (t) {
+          var b = btn(t[1] + " ", st.sub === t[0], function () { setSub(t[0]); });
+          b.appendChild(h("span", { class: "sd-k-tabcount", text: String(t[2]) }));
+          return b;
+        })));
+    }
+    function banners() {
+      var d = st.data, out = [];
+      if (!d) return out;
+      if (d.writes !== "on") out.push(h("p", { class: "sd-k-banner", role: "status", text: "Preview mode: LEMLIST_WRITES is off, so nothing is sent to lemlist. Every button shows what it would send." }));
+      if (d.viewOnly) out.push(h("p", { class: "sd-k-banner", role: "status", text: "View only: your login is not allowed to send or log calls as the lemlist user." }));
+      if (!d.statuses.callsApi) out.push(h("p", { class: "sd-k-banner", role: "status", text: "Calls API needs Email Pro+: call tasks are listed, but log the calls in lemlist itself. Manual tasks and the inbox work." }));
+      if (st.msg) out.push(h("p", { class: "sd-k-banner sd-k-banner-" + st.msg.kind, role: st.msg.kind === "error" ? "alert" : "status", text: st.msg.text }));
+      if (st.error) out.push(h("p", { class: "sd-k-banner sd-k-banner-error", role: "alert", text: st.error }));
+      return out;
+    }
+
+    // ---------------------------------------------------------- A. call tasks + "Now calling"
+    function callsSection() {
+      var d = st.data;
+      var queue = d.queue.filter(function (q) { return !st.caller || q.assignedTo === st.caller; });
+      var cur = queue.filter(function (q) { return q.id === st.sel && !st.logged[q.id]; })[0] || queue.filter(function (q) { return !st.logged[q.id]; })[0] || null;
+      if (cur && cur.id !== st.sel) { st.sel = cur.id; resetCall(); }
+      var callerSel = h("select", { id: "owner", class: "sd-k-select", "aria-label": "Caller" });
+      [["", "All callers"]].concat(d.callers.map(function (u) { return [u.userId, u.name]; })).forEach(function (o) { var op = h("option", { value: o[0], text: o[1] }); if (o[0] === st.caller) op.selected = true; callerSel.appendChild(op); });
+      callerSel.addEventListener("change", function () { st.caller = callerSel.value; render(); });
+      var list = h("div", { class: "sd-k-list" });
+      if (!queue.length) list.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "No call tasks in lemlist right now." }));
+      queue.forEach(function (k) {
+        var done = st.logged[k.id], on = cur && k.id === cur.id, du = due(k);
+        list.appendChild(h("button", { type: "button", class: "sd-k-row" + (on ? " sd-k-row-on" : done ? " sd-k-row-done" : ""), "aria-current": on ? "true" : null,
+          onclick: function () { if (!st.logged[k.id] && st.sel !== k.id) { st.sel = k.id; resetCall(); render(); } } },
+          h("span", { class: "sd-k-cell" }, h("span", { class: "sd-o-strong", text: k.name }), h("span", { class: "sd-muted sd-o-small", text: [k.jobTitle, k.company].filter(Boolean).join(" · ") })),
+          h("span", { class: "sd-k-cell" }, h("span", { class: "sd-o-small13", text: [k.campaign, k.step ? "step " + k.step : ""].filter(Boolean).join(" · ") }),
+            h("span", { class: "sd-o-signal", text: k.signal ? k.signal.track + " · " + k.signal.jobTitle : (k.kind === "manualCall" ? k.title : "") })),
+          h("span", { class: "sd-o-small" + (du.late ? " sd-k-late" : " sd-muted"), text: du.text }),
+          h("span", { class: "sd-k-status sd-pill-fill " + (done ? done.cls : on ? "sd-c-call" : "sd-st-in-sequence"), text: done ? done.label : on ? "Calling" : "To call" })));
+      });
+      var t = d.today;
+      return h("section", { class: "sd-card sd-k-sec sd-c-call", "aria-label": "Call tasks" },
+        h("div", { class: "sd-k-head" },
+          h("div", { class: "sd-o-stack-xxs sd-o-gap4" }, h("h2", { class: "sd-k-h2" }, "Call tasks ", h("span", { class: "sd-k-count", text: d.counts.calls + " due" })),
+            h("span", { class: "sd-muted sd-o-small13", text: "Synced from lemlist Tasks. Logging the outcome here completes the task in lemlist and moves the lead to its next step." })),
+          h("div", { class: "sd-o-wrap" }, h("span", { class: "sd-muted sd-o-small13" }, "Done today: ", h("strong", { class: "sd-k-strong", text: String(t.done) }), " · answered " + t.answered + " · positive " + t.positive),
+            h("label", { for: "owner", class: "sr-only", text: "Caller" }), callerSel)),
+        h("div", { class: "sd-k-body" }, list, nowCalling(cur)));
+    }
+    function nowCalling(cur) {
+      var d = st.data;
+      var box = h("div", { class: "sd-k-now", "aria-label": "Now calling", role: "region" });
+      if (!cur) {
+        box.appendChild(h("div", { class: "sd-o-stack-xxs sd-o-gap4" }, h("span", { class: "sd-k-eyebrow", text: "Now calling" }), h("span", { class: "sd-k-name", text: "All calls done" }),
+          h("span", { class: "sd-o-small13", text: "Context: Nothing left in the queue." })));
+        return box;
+      }
+      var c = cur.context, parts = [];
+      if (c.events.length) parts.push(c.events.map(function (e) { return e.label + " " + when(e.at); }).join("; "));
+      else parts.push("No email or LinkedIn activity yet");
+      if (c.atlas) parts.push((c.atlas.matching !== null ? c.atlas.matching + " matching titles in Atlas" : c.atlas.pool + " in the Atlas pool"));
+      if (cur.signal) parts.push("Signal: " + cur.signal.track + " · " + cur.signal.jobTitle);
+      if (cur.kind === "manualCall") parts.push("lemlist task: " + cur.title);
+      var tel = c.tel && /^tel:\+?[0-9]{4,20}$/.test(c.tel) ? c.tel : null; // digits only (built by the server)
+      var li = safeHref(c.linkedin);
+      box.appendChild(h("div", { class: "sd-o-stack-xxs sd-o-gap4" }, h("span", { class: "sd-k-eyebrow", text: "Now calling" }), h("span", { class: "sd-k-name", text: cur.name }),
+        h("span", { class: "sd-muted sd-o-small13", text: [cur.jobTitle, cur.company].filter(Boolean).join(" · ") }), h("span", { class: "sd-o-small13", text: "Context: " + parts.join(". ") + "." })));
+      box.appendChild(h("div", { class: "sd-o-wrap" },
+        tel ? h("a", { href: tel, class: "sd-k-callbtn", text: "Call " + c.phone }) : h("span", { class: "sd-k-nophone sd-muted", text: "No phone number in lemlist" }),
+        li ? h("a", { href: li, target: "_blank", rel: "noopener noreferrer", class: "sd-btn-link", text: "LinkedIn" }) : null));
+      var ro = d.viewOnly || !d.statuses.callsApi;
+      box.appendChild(h("span", { class: "sd-k-step", text: "1. Did they answer?" }));
+      var a1 = btn("Answered", st.ans === true, function () { st.ans = true; st.res = null; render(); }), a2 = btn("Not answered", st.ans === false, function () { st.ans = false; st.res = null; render(); });
+      if (ro) { a1.disabled = true; a2.disabled = true; }
+      box.appendChild(h("div", { class: "sd-o-wrap" }, a1, a2));
+      box.appendChild(h("span", { class: "sd-k-step", text: "2. Outcome" }));
+      var opts = st.ans === null ? [] : (st.ans ? d.statuses.answered : d.statuses.notAnswered);
+      box.appendChild(h("div", { class: "sd-o-wrap" }, opts.map(function (o) {
+        var b = btn(o.label, st.res === o.key, function () { st.res = o.key; render(); });
+        b.title = [o.positive ? "marks the lead interested" : "", o.negative ? "marks the lead not interested" : "", o.pauses ? "pauses the campaign" : ""].filter(Boolean).join(", ");
+        return b;
+      })));
+      box.appendChild(h("label", { for: "call-note", class: "sd-k-step", text: "3. Note (goes to lemlist)" }));
+      var note = h("textarea", { id: "call-note", rows: "3", class: "sd-k-textarea", placeholder: "e.g. Hiring 2 SOC analysts in Q1, call back Monday", maxlength: "2000" });
+      note.value = st.note;
+      note.addEventListener("input", function () { st.note = note.value; });
+      box.appendChild(note);
+      var tomorrow = new Date(Date.now() + 86400000);
+      var cb = h("input", { id: "callback", type: "date", class: "sd-k-date", min: tz(tomorrow, { year: "numeric" }) + "-" + tz(tomorrow, { month: "2-digit" }) + "-" + tz(tomorrow, { day: "2-digit" }) });
+      cb.value = st.cb;
+      cb.addEventListener("change", function () { st.cb = cb.value; render(); });
+      box.appendChild(h("div", { class: "sd-o-wrap" }, h("label", { for: "callback", class: "sd-muted sd-o-small13", text: "Call back on" }), cb));
+      var lbl = st.res ? (st.cb ? "Save & move task to " + st.cb : "Save & complete task in lemlist") : "Pick an outcome first";
+      var save = h("button", { type: "button", class: "sd-k-save", onclick: function () { saveCall(cur); }, text: st.busy ? "Saving…" : lbl });
+      if (!st.res || st.busy || ro) save.disabled = true;
+      box.appendChild(save);
+      var resLabel = st.res ? (opts.filter(function (o) { return o.key === st.res; })[0] || {}).label : "";
+      box.appendChild(h("span", { class: "sd-muted sd-o-small", text: st.res ? (st.cb ? "Logs the call as \"" + resLabel + "\" with your note and moves the lemlist task to " + st.cb + "." : "Logs the call as \"" + resLabel + "\" with your note, completes the lemlist task, and opens the next call.") : "Choose Answered or Not answered, then the outcome." }));
+      box.appendChild(h("span", { class: "sd-muted sd-o-small", text: d.sender ? d.sender.label : "View only: calls cannot be logged from this login." }));
+      return box;
+    }
+    function saveCall(cur) {
+      if (!st.res || st.busy) return;
+      var opts = st.ans ? st.data.statuses.answered : st.data.statuses.notAnswered;
+      var o = opts.filter(function (x) { return x.key === st.res; })[0] || { label: st.res };
+      st.busy = true; render();
+      api("/api/calls/log", { method: "POST", body: { taskId: cur.id, attempt: st.attempt, answered: st.ans, status: st.res, note: st.note, callbackDate: st.cb } }).then(function (r) {
+        st.busy = false;
+        if (r.retry) { say("warn", r.message); return; }
+        if (r.preview) { st.logged[cur.id] = { label: "Preview", cls: "sd-c-fin" }; st.msg = { kind: "warn", text: previewText(r) }; }
+        else if (r.ok) { st.logged[cur.id] = { label: st.cb ? "Call back" : o.label, cls: o.positive ? "sd-c-int" : o.negative ? "sd-c-bnc" : "sd-c-fin" }; st.msg = { kind: "ok", text: r.message }; if (r.today) st.data.today = r.today; }
+        else { st.msg = { kind: "warn", text: r.message }; }
+        resetCall();
+        st.sel = null;
+        if (r.refreshed || r.ok) load(); else render();
+      }, function (e) { st.busy = false; say("error", e.message); });
+    }
+
+    // ---------------------------------------------------------- B. manual tasks
+    function manualSection() {
+      var d = st.data;
+      var count = function (f) { return d.manual.filter(function (m) { return (f === "all" || m.manualType === f) && !st.mDone[m.id]; }).length; };
+      var filters = MF.filter(function (f) { return ["all", "call", "li", "email", "ooo"].indexOf(f[0]) >= 0; }); // as in the mockup; visits and other tasks show under All
+      var list = h("div", { class: "sd-k-mlist" });
+      var shown = d.manual.filter(function (m) { return st.mFilter === "all" || m.manualType === st.mFilter; });
+      if (!shown.length) list.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "No open manual tasks here." }));
+      shown.forEach(function (m) {
+        var t = MT[m.manualType] || MT.task, du = due(m), closed = st.mDone[m.id];
+        var typeLabel = m.manualType === "li" && m.type === "linkedinInvite" ? "LinkedIn invite" : m.manualType === "li" && m.type === "linkedinVoiceNote" ? "LinkedIn voice note" : t[0];
+        var left = h("div", { class: "sd-k-mleft" }, h("span", { class: "sd-k-type " + t[1], text: typeLabel }),
+          h("div", { class: "sd-o-stack-xxs" }, h("span", { class: "sd-o-strong", text: m.title || typeLabel }),
+            h("span", { class: "sd-muted sd-o-small", text: [m.name, m.company, m.campaign].filter(Boolean).join(" · ") }),
+            m.preview ? h("span", { class: "sd-k-preview" }, h("span", { class: "sd-k-approx", text: "Approximate preview" }), (m.preview.subject ? "Subject: " + m.preview.subject + "\n" : "") + m.preview.text) : null));
+        var right = h("div", { class: "sd-o-wrap" }, h("span", { class: "sd-k-due" + (du.late ? " sd-k-late" : " sd-muted"), text: du.text }));
+        if (closed) right.appendChild(h("span", { class: "sd-k-closed sd-pill-fill " + (closed === "Skipped" || closed === "Preview" ? "sd-c-fin" : "sd-c-int"), text: closed }));
+        else {
+          var primary = m.kind === "manualCall" ? btn("Log call", true, function () { st.sel = m.id; resetCall(); setSub("calls"); }, null)
+            : m.kind === "message" ? btn("Send", true, function () { manualAction(m, "send"); }) : btn("Done", true, function () { manualAction(m, "done"); });
+          primary.removeAttribute("aria-pressed");
+          var skip = btn("Skip", null, function () { manualAction(m, "skip"); });
+          if (d.viewOnly) { primary.disabled = m.kind !== "manualCall"; skip.disabled = true; }
+          right.appendChild(h("div", { class: "sd-k-btns" }, primary, skip));
+        }
+        list.appendChild(h("div", { class: "sd-k-mrow" + (closed ? " sd-k-row-done" : "") }, left, right));
+      });
+      return h("section", { class: "sd-card sd-k-sec sd-c-message", "aria-label": "Manual tasks" },
+        h("div", { class: "sd-k-head" },
+          h("div", { class: "sd-o-stack-xxs sd-o-gap4" }, h("h2", { class: "sd-k-h2" }, "Manual tasks ", h("span", { class: "sd-k-count", text: count("all") + " open" })),
+            h("span", { class: "sd-muted sd-o-small13", text: "Every manual step from lemlist: follow-up calls, LinkedIn messages and emails to review, out-of-office checks. Done or Skip here closes it in lemlist." })),
+          h("div", { class: "sd-o-group", role: "group", "aria-label": "Task type" }, filters.map(function (f) {
+            var b = btn(f[1] + " ", st.mFilter === f[0], function () { st.mFilter = f[0]; render(); });
+            b.appendChild(h("span", { class: "sd-k-tabcount", text: String(count(f[0])) }));
+            return b;
+          }))),
+        list,
+        h("span", { class: "sd-muted sd-o-small", text: "Call-type manual tasks (\"Calling again\", \"Final call\") open the call logger, so the outcome is recorded too. Message tasks show the text lemlist will send; Send closes the task and lemlist sends the step." }));
+    }
+    function manualAction(m, action) {
+      var go = action !== "send" ? Promise.resolve(true) : confirmDialog("Send this step to " + m.name + "?",
+        "lemlist sends the " + (m.type === "email" ? "email" : "LinkedIn step") + " exactly as it is in the campaign \"" + m.campaign + "\" (the preview here is approximate). "
+        + (st.data.sender ? st.data.sender.label + "." : ""), "Send");
+      go.then(function (yes) {
+        if (!yes) return;
+        api("/api/calls/task", { method: "POST", body: { taskId: m.id, action: action, confirm: action === "send" ? true : undefined } }).then(function (r) {
+          st.mDone[m.id] = r.preview ? "Preview" : r.refreshed ? "Closed" : { send: "Sent", done: "Done", skip: "Skipped" }[action];
+          st.msg = { kind: r.preview || r.refreshed ? "warn" : "ok", text: r.preview ? previewText(r) : r.message };
+          if (r.ok && !r.preview) load(); else render();
+        }, function (e) { say("error", e.message); });
+      });
+    }
+
+    // ---------------------------------------------------------- C. inbox
+    function inboxSection() {
+      var ib = st.inbox, d = st.data;
+      var left = h("div", { class: "sd-k-ileft" });
+      left.appendChild(h("div", { class: "sd-k-ihead" },
+        h("div", { class: "sd-o-between" }, h("h2", { class: "sd-o-h2", text: "Inbox" }), h("span", { class: "sd-muted sd-o-small", text: ib.unread + " unread · synced with lemlist" })),
+        h("div", { class: "sd-k-chips", role: "group", "aria-label": "Inbox filter" }, [["all", "All"], ["unread", "Unread"], ["Interested", "Interested"], ["Meeting", "Meeting"]].map(function (f) {
+          return btn(f[1], ib.filter === f[0], function () { ib.filter = f[0]; loadInbox(); }, "sd-btn-sm");
+        }))));
+      if (ib.loading) left.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "Reading the lemlist inbox…" }));
+      else if (ib.list && !ib.list.length) left.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "No conversations here." }));
+      (ib.list || []).forEach(function (c) {
+        left.appendChild(h("button", { type: "button", class: "sd-k-conv" + (c.contactId === ib.sel ? " sd-k-conv-on" : ""), "aria-current": c.contactId === ib.sel ? "true" : null, onclick: function () { openThread(c.contactId); } },
+          h("span", { class: "sd-o-between" }, h("span", { class: "sd-k-convname" + (c.unread ? " sd-k-unread" : "") }, h("span", { class: "sd-dot " + (c.unread ? "sd-c-accent" : "sd-k-nodot"), "aria-hidden": "true" }), c.name + (c.unread ? "" : "")),
+            h("span", { class: "sd-muted sd-o-small", text: when(c.at) })),
+          h("span", { class: "sd-muted sd-o-small", text: [c.company, c.campaign].filter(Boolean).join(" · ") || "Not in a campaign" }),
+          h("span", { class: "sd-k-snippet", text: c.snippet }),
+          h("span", { class: "sd-k-chips6" }, h("span", { class: "sd-k-chip " + (c.channel === "linkedin" ? "sd-c-message" : "sd-c-email"), text: c.channel === "linkedin" ? "LinkedIn" : "Email" }),
+            c.label ? h("span", { class: "sd-k-lbl " + (LBL[c.label] || "sd-c-muted"), text: c.label }) : null)));
+      });
+      var right = h("div", { class: "sd-k-iright" });
+      var t = ib.thread;
+      if (!ib.sel) right.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "Choose a conversation." }));
+      else if (!t) right.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "Loading the conversation…" }));
+      else {
+        var conv = (ib.list || []).filter(function (c) { return c.contactId === t.contactId; })[0] || {};
+        right.appendChild(h("div", { class: "sd-k-thead" },
+          h("div", { class: "sd-o-stack-xxs" }, h("span", { class: "sd-k-tname", text: t.name || conv.name || "Contact" }),
+            h("span", { class: "sd-muted sd-o-small13", text: [t.jobTitle, t.company, t.signal].filter(Boolean).join(" · ") || "Not a campaign lead" })),
+          h("div", { class: "sd-k-chips", role: "group", "aria-label": "Label" }, ["Interested", "Meeting", "Not interested", "Out of office"].map(function (l) {
+            var b = btn(l, conv.label === l, function () { setLabel(conv, conv.label === l ? null : l); }, "sd-btn-sm");
+            if (d.viewOnly) b.disabled = true;
+            return b;
+          }))));
+        right.appendChild(h("div", { class: "sd-k-msgs" }, t.messages.concat(ib.sent.filter(function (s) { return s.contactId === t.contactId; })).map(function (m) {
+          return h("div", { class: "sd-k-msgrow" + (m.out ? " sd-k-out" : "") }, h("div", { class: "sd-k-bubble" + (m.out ? " sd-k-bubble-out" : "") },
+            h("span", { class: "sd-k-meta", text: (m.out ? "You · " : "") + m.who + " · " + m.channel + " · " + whenLong(m.at) }),
+            h("span", { class: "sd-k-text", text: (m.subject && !m.out ? "" : "") + m.text })));
+        })));
+        var box = h("textarea", { id: "reply-box", rows: "4", class: "sd-k-textarea", placeholder: "Write your reply…", maxlength: "5000" });
+        box.value = ib.draft;
+        box.addEventListener("input", function () { ib.draft = box.value; });
+        var liBtn = btn("LinkedIn", ib.ch === "linkedin", function () { ib.ch = "linkedin"; render(); }, "sd-btn-sm");
+        if (!t.canLinkedin) { liBtn.disabled = true; liBtn.title = "LinkedIn replies work for campaign leads only"; }
+        var send = h("button", { type: "button", class: "sd-k-send", onclick: function () { sendReply(t); }, text: "Send via lemlist" });
+        if (d.viewOnly) send.disabled = true;
+        right.appendChild(h("div", { class: "sd-k-compose" },
+          h("div", { class: "sd-o-wrap" }, h("span", { class: "sd-muted sd-o-small13", text: "Reply via" }), btn("Email", ib.ch === "email", function () { ib.ch = "email"; render(); }, "sd-btn-sm"), liBtn,
+            h("span", { class: "sd-muted sd-o-small", text: d.sender ? d.sender.label + (ib.ch === "email" ? " · lemlist mailbox" : " · LinkedIn via lemlist") : "View only" }),
+            !t.canLinkedin ? h("span", { class: "sd-muted sd-o-small", text: "LinkedIn: campaign leads only." }) : null),
+          h("label", { for: "reply-box", class: "sr-only", text: "Reply" }), box,
+          h("div", { class: "sd-k-composefoot" }, h("span", { class: "sd-muted sd-o-small", text: "Sent through lemlist, in the same thread. The lead's campaign stops automatically after a reply, as in lemlist." }), send)));
+      }
+      return h("section", { class: "sd-card sd-k-inbox sd-c-email", "aria-label": "Inbox" }, left, right);
+    }
+    function sendReply(t) {
+      var text = (st.inbox.draft || "").trim();
+      if (!text) { say("warn", "Write a reply first."); return; }
+      var ch = st.inbox.ch;
+      confirmDialog("Send this " + (ch === "email" ? "email" : "LinkedIn message") + " to " + (t.name || "this contact") + "?",
+        (st.data.sender ? st.data.sender.label + ". " : "") + (ch === "email" ? "It goes out in the same email thread." : "It goes out on LinkedIn through lemlist.") + " No attachments.", "Send").then(function (yes) {
+        if (!yes) return;
+        api("/api/calls/reply", { method: "POST", body: { contactId: t.contactId, channel: ch, message: text, confirm: true } }).then(function (r) {
+          if (r.preview) { st.msg = { kind: "warn", text: previewText(r) }; render(); return; }
+          st.inbox.sent.push({ contactId: t.contactId, out: true, who: st.data.sender ? st.data.sender.name : "You", channel: ch === "email" ? "Email" : "LinkedIn", at: new Date().toISOString(), text: text });
+          st.inbox.draft = "";
+          st.msg = { kind: "ok", text: r.message };
+          render();
+        }, function (e) { say("error", e.message); });
+      });
+    }
+    function setLabel(conv, label) {
+      api("/api/calls/label", { method: "POST", body: { contactId: conv.contactId, label: label } }).then(function (r) {
+        if (r.preview) { st.msg = { kind: "warn", text: previewText(r) }; render(); return; }
+        conv.label = r.label; st.msg = { kind: "ok", text: r.message }; render();
+      }, function (e) { say("error", e.message); });
+    }
+
+    function render() {
+      var focus = document.activeElement && document.activeElement.id;
+      clear(root);
+      root.appendChild(header());
+      banners().forEach(function (b) { root.appendChild(b); });
+      if (!st.data) { if (!st.error) root.appendChild(h("p", { class: "sd-o-loading" }, h("span", { class: "sd-spinner" }), " Reading lemlist tasks…")); return; }
+      root.appendChild(st.sub === "calls" ? callsSection() : st.sub === "manual" ? manualSection() : inboxSection());
+      if (focus) { var el = document.getElementById(focus); if (el && el.focus) el.focus(); }
+    }
+
+    // live updates: the webhook marks news in the local database; poll that (cheap) every 15 s, reload what changed, full reload every 60 s
+    var ticks = 0;
+    setInterval(function () {
+      if (document.hidden || st.busy) return;
+      ticks++;
+      var typing = document.activeElement && (document.activeElement.tagName === "TEXTAREA" || document.activeElement.tagName === "INPUT");
+      api("/api/calls/updates").then(function (u) {
+        var b = document.querySelector(".sd-top-badge");
+        if (b) b.textContent = String(u.badge);
+        var changed = function (k) { var v = u[k] || 0; var was = st.seen[k]; st.seen[k] = v; return was !== undefined && was !== v; };
+        var tasks = changed("tasksAt"), inbox = changed("inboxAt"), any = changed("eventAt");
+        if ((tasks || any || ticks % 4 === 0) && st.sub !== "inbox" && !typing && st.ans === null) load();
+        if ((inbox || ticks % 4 === 0) && st.inbox.list && !typing) loadInbox(true);
+      }, function () { /* offline: try again next tick */ });
+    }, 15000);
+    render();
+    load().then(function () { if (st.sub === "inbox") loadInbox(); else api("/api/calls/inbox").then(function (d) { st.inbox.unread = d.unread; st.inbox.list = st.inbox.list || null; render(); }, function () { }); });
+  }
+
   var OUTREACH_STATUS_LABEL = { "Replied": "Replied: needs outcome" };
   function statusSlug(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
   function outreachPage() {
