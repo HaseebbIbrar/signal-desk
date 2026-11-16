@@ -492,3 +492,16 @@ button.sd-o-action:hover { background: #33224f; }
 .sd-k-dialog::backdrop { background: rgb(10 6 18 / 0.7); }
 .sd-k-dialog-text { margin: 0; font-size: 14px; color: var(--sd-muted); }
 .sd-k-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+
+/* call script in "Now calling" and on call-type manual tasks: card on #1c1230 with the orange call accent, 16 px text */
+.sd-k-script { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 12px; background: var(--sd-deep); border: 1px solid var(--sd-card-border); border-left: 4px solid var(--sd-call); }
+.sd-k-script-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sd-call); }
+.sd-k-script-field { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--sd-muted); }
+.sd-k-script-text { margin: 0; font-size: 16px; line-height: 1.5; white-space: pre-line; color: var(--sd-text); }
+.sd-k-script-text.sd-muted { color: var(--sd-muted); }
+.sd-k-script-raw { margin: 0; font-size: 13px; white-space: pre-line; color: #e7dcf7; padding: 6px 8px; border-radius: 8px; background: var(--sd-page); border: 1px solid var(--sd-divider); }
+.sd-k-vm { border-radius: 12px; background: var(--sd-deep); border: 1px solid var(--sd-card-border); border-left: 4px solid var(--sd-fin); }
+.sd-k-vm-sum { display: flex; align-items: center; min-height: 44px; padding: 0 14px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.sd-k-vm-sum:focus-visible { outline: 2px solid var(--sd-link); outline-offset: 2px; }
+.sd-k-vm-body { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 12px; }
+.sd-k-preview-call { border-left: 3px solid var(--sd-call); font-size: 14px; }

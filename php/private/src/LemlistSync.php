@@ -287,6 +287,11 @@ final class LemlistSync
     private function syncLeads(string $cid): void
     {
         $rows = $this->client->get("/v2/campaigns/$cid/export/leads", ['state' => 'all', 'format' => 'json']);
+        // the {{variables}} this campaign's steps use: their values (call scripts, personalised lines) are kept per lead
+        $vars = [];
+        foreach ($this->store->all('SELECT title, message FROM steps WHERE campaign_id = ?', [$cid]) as $s) {
+            foreach (LeadVars::names((string) $s['title'] . ' ' . (string) $s['message']) as $n) $vars[$n] = true;
+        }
         foreach (array_is_list($rows) ? $rows : [] as $l) {
             $li = (string) ($l['linkedinUrl'] ?? '');
             $paused = in_array(strtolower((string) ($l['lastState'] ?? '')), ['paused'], true) || strtolower((string) ($l['status'] ?? '')) === 'paused';
@@ -295,7 +300,8 @@ final class LemlistSync
                 'company' => mb_substr((string) ($l['companyName'] ?? ''), 0, 200), 'title' => mb_substr((string) ($l['jobTitle'] ?? ''), 0, 200),
                 'linkedin' => mb_substr($li, 0, 300), 'linkedin_key' => LinkedIn::profileKey($li), 'email' => mb_substr((string) ($l['email'] ?? ''), 0, 200),
                 'phone' => mb_substr((string) ($l['phone'] ?? ''), 0, 60), 'last_state' => (string) ($l['lastState'] ?? ''), 'status' => (string) ($l['status'] ?? ''),
-                'paused' => (int) $paused, 'added_at' => (string) ($l['createdAt'] ?? $l['addedAt'] ?? ''), 'updated_at' => ($this->now)()];
+                'paused' => (int) $paused, 'added_at' => (string) ($l['createdAt'] ?? $l['addedAt'] ?? ''), 'updated_at' => ($this->now)(),
+                'fields' => LeadVars::pick($l, array_keys($vars))];
             $this->store->upsertLead($row);
         }
     }
@@ -314,6 +320,13 @@ final class LemlistSync
         self::storeTaskRow($this->store, $t, $seen);
     }
 
+    /** Task titles are filled from step titles like "Call {{phone}}": phones and emails never stay in the tasks table. */
+    public static function maskTitle(string $title): string
+    {
+        $t = preg_replace('/[\w.+-]+@[\w-]+(\.[\w-]+)+/u', '(email)', $title) ?? $title;
+        return preg_replace('/\+?\d[\d\s().\/-]{5,}\d/u', '(phone)', $t) ?? $t;
+    }
+
     /** One open task from GET /v2/tasks into the tasks table (the contact's phone goes to its lead, if the lead has none). */
     public static function storeTaskRow(LemlistStore $store, array $t, int $seen): void
     {
@@ -323,10 +336,76 @@ final class LemlistSync
         }
         $store->upsertTask(['id' => (string) $t['_id'], 'type' => (string) ($t['type'] ?? ''), 'channel' => (string) ($t['channel'] ?? ''), 'status' => (string) ($t['status'] ?? ''),
             'campaign_id' => (string) ($t['campaignId'] ?? ''), 'lead_id' => (string) ($t['leadId'] ?? ''), 'contact_id' => (string) ($t['contactId'] ?? ''),
-            'assigned_to' => (string) ($t['assignedTo'] ?? ''), 'title' => mb_substr((string) ($t['title'] ?? ''), 0, 300), 'message' => mb_substr((string) ($t['message'] ?? ''), 0, 20000),
+            'assigned_to' => (string) ($t['assignedTo'] ?? ''), 'title' => mb_substr(self::maskTitle((string) ($t['title'] ?? '')), 0, 300), 'message' => mb_substr((string) ($t['message'] ?? ''), 0, 20000),
             'due_date' => (string) ($t['dueDate'] ?? ''), 'manual' => (int) !empty($t['manual']),
             'lead_name' => mb_substr(trim(($t['leadFirstName'] ?? '') . ' ' . ($t['leadLastName'] ?? '')), 0, 200), 'lead_company' => mb_substr((string) ($t['leadCompanyName'] ?? ''), 0, 200),
-            'seen_at' => $seen]);
+            'seen_at' => $seen, 'step_id' => isset($t['stepId']) ? (string) $t['stepId'] : null,
+            'seq_step' => isset($t['sequenceStep']) && is_numeric($t['sequenceStep']) ? (int) $t['sequenceStep'] : null]);
+    }
+}
+
+/** lemlist {{variables}}: which ones a text uses, the lead's values for them, and filling a text in. */
+final class LeadVars
+{
+    public const MAX_VALUE = 10000;
+    /** Standard lead fields (always available from the leads table), lowercase name => column. */
+    private const STANDARD = ['firstname' => 'first_name', 'lastname' => 'last_name', 'companyname' => 'company', 'jobtitle' => 'title', 'phone' => 'phone',
+        'email' => 'email', 'linkedinurl' => 'linkedin'];
+
+    private static function key(string $name): string
+    {
+        return strtolower((string) preg_replace('/\s+/', '', $name));
+    }
+
+    /** "{{Touch 1 Call}} and {{firstName|there}}" -> ["Touch 1 Call", "firstName"] */
+    public static function names(string $text): array
+    {
+        preg_match_all('/\{\{\s*([^{}|]+?)\s*(?:\|[^{}]*)?\}\}/u', $text, $m);
+        return array_values(array_unique(array_map('trim', $m[1])));
+    }
+
+    /** JSON of the lead's values for the custom (non-standard) variables, matched by name ignoring case and spaces. */
+    public static function pick(array $lead, array $names): ?string
+    {
+        $byKey = [];
+        foreach ($lead as $k => $v) if (is_string($k) && (is_string($v) || is_numeric($v))) $byKey[self::key($k)] = [$k, (string) $v];
+        $out = [];
+        foreach ($names as $n) {
+            if (isset(self::STANDARD[self::key($n)])) continue;
+            $hit = $byKey[self::key($n)] ?? null;
+            if ($hit !== null) $out[$n] = mb_substr($hit[1], 0, self::MAX_VALUE);
+        }
+        return $out ? json_encode($out, JSON_UNESCAPED_UNICODE) : null;
+    }
+
+    /** Values for filling: the lead's standard fields plus its stored custom fields. */
+    public static function values(?array $leadRow): array
+    {
+        if (!$leadRow) return [];
+        $v = [];
+        foreach (self::STANDARD as $k => $col) if (($leadRow[$col] ?? '') !== '') $v[$k] = (string) $leadRow[$col];
+        foreach (json_decode((string) ($leadRow['fields'] ?? ''), true) ?: [] as $n => $val) if (is_string($val)) $v[self::key((string) $n)] = $val;
+        return $v;
+    }
+
+    /**
+     * Fill {{name}} / {{name|fallback}} from $values (names match ignoring case and spaces); unknown or empty ones keep the
+     * fallback, else stay as written. Values that themselves contain {{variables}} are filled once more.
+     * @return array{0:string,1:array} [text, names that had no value]
+     */
+    public static function fill(string $text, array $values, int $depth = 0): array
+    {
+        $missing = [];
+        $out = preg_replace_callback('/\{\{\s*([^{}|]+?)\s*(?:\|([^{}]*))?\}\}/u', function ($m) use ($values, $depth, &$missing) {
+            $v = $values[self::key($m[1])] ?? '';
+            if (trim($v) === '') {
+                if (isset($m[2]) && $m[2] !== '') return $m[2];
+                $missing[] = trim($m[1]);
+                return $m[0];
+            }
+            return $depth < 1 ? self::fill($v, $values, $depth + 1)[0] : $v;
+        }, $text) ?? $text;
+        return [$out, array_values(array_unique($missing))];
     }
 }
 

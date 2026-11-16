@@ -47,19 +47,21 @@ final class MockLemlist
                     ['_id' => 'stp_it_1', 'type' => 'linkedinInvite', 'index' => 2, 'sequenceStep' => 1, 'delay' => 1, 'message' => ''],
                     ['_id' => 'stp_it_2', 'type' => 'conditional', 'index' => 3, 'sequenceStep' => 2, 'delay' => 2, 'conditions' => [
                         ['sequenceId' => 'seq_it_acc', 'label' => 'If LinkedIn invite accepted', 'name' => 'Accepted'], ['sequenceId' => 'seq_it_else', 'fallback' => true, 'label' => 'Else']]],
-                    ['_id' => 'stp_it_3', 'type' => 'phone', 'index' => 4, 'sequenceStep' => 3, 'delay' => 2, 'title' => 'Call {{firstName}}'],
-                    ['_id' => 'stp_it_4', 'type' => 'manual', 'index' => 5, 'sequenceStep' => 4, 'delay' => 3, 'title' => 'Calling again'],
+                    ['_id' => 'stp_it_3', 'type' => 'phone', 'index' => 4, 'sequenceStep' => 3, 'delay' => 2, 'title' => 'Call {{phone}}', 'message' => '{{Touch 1 Call}}'],
+                    ['_id' => 'stp_it_4', 'type' => 'manual', 'index' => 5, 'sequenceStep' => 4, 'delay' => 3, 'title' => 'Calling Again {{phone}}', 'message' => '{{Call-again}}'],
                     ['_id' => 'stp_it_5', 'type' => 'email', 'index' => 6, 'sequenceStep' => 5, 'delay' => 4, 'subject' => 'Re: Your {{jobTitle}} search', 'message' => '<p>Last note from me, {{firstName}}.</p>'],
                 ]],
                 'seq_it_acc' => ['_id' => 'seq_it_acc', 'steps' => [['_id' => 'stp_it_acc_0', 'type' => 'linkedinSend', 'index' => 1, 'sequenceStep' => 0, 'delay' => 0, 'message' => 'Thanks for connecting, {{firstName}}!']]],
-                'seq_it_else' => ['_id' => 'seq_it_else', 'steps' => [['_id' => 'stp_it_else_0', 'type' => 'email', 'index' => 1, 'sequenceStep' => 0, 'delay' => 0, 'subject' => 'Quick follow-up', 'message' => '<p>Following up.</p>']]],
+                'seq_it_else' => ['_id' => 'seq_it_else', 'steps' => [['_id' => 'stp_it_else_0', 'type' => 'email', 'index' => 1, 'sequenceStep' => 0, 'delay' => 0, 'subject' => 'Quick follow-up', 'message' => '<p>Following up.</p>'],
+                    ['_id' => 'stp_it_else_1', 'type' => 'manual', 'index' => 2, 'sequenceStep' => 1, 'delay' => 1, 'title' => 'Voice mail{{phone}}', 'message' => '<p>{{Touch 2 mail}}</p>'],
+                    ['_id' => 'stp_it_else_2', 'type' => 'manual', 'index' => 3, 'sequenceStep' => 2, 'delay' => 2, 'title' => 'Final Call {{phone}}', 'message' => '{{Final call}}']]],
             ],
             'cam_hr000001' => [
                 'seq_hr_main' => ['_id' => 'seq_hr_main', 'steps' => [
                     ['_id' => 'stp_hr_0', 'type' => 'email', 'index' => 1, 'sequenceStep' => 0, 'delay' => 0, 'subject' => 'Hiring IT people?', 'message' => '<p>Hello {{firstName}}</p>'],
                     ['_id' => 'stp_hr_1', 'type' => 'linkedinInvite', 'index' => 2, 'sequenceStep' => 1, 'delay' => 1],
                     ['_id' => 'stp_hr_2', 'type' => 'linkedinSend', 'index' => 3, 'sequenceStep' => 2, 'delay' => 2, 'message' => 'Hi {{firstName}}, happy to help with your IT hiring.'],
-                    ['_id' => 'stp_hr_3', 'type' => 'phone', 'index' => 4, 'sequenceStep' => 3, 'delay' => 2, 'title' => 'Call {{firstName}}'],
+                    ['_id' => 'stp_hr_3', 'type' => 'phone', 'index' => 4, 'sequenceStep' => 3, 'delay' => 2, 'title' => 'Call {{phone}}', 'message' => '{{Touch 1 Call}}'],
                 ]],
             ],
         ];
@@ -67,6 +69,16 @@ final class MockLemlist
             '_id' => $id, 'campaignId' => $cid, 'contactId' => 'ctc_' . substr($id, 4), 'firstName' => $first, 'lastName' => $last, 'companyName' => $company, 'jobTitle' => $title,
             'linkedinUrl' => $li, 'email' => strtolower("$first.$last@mail.example"), 'phone' => '+32 470 00 ' . sprintf('%02d %02d', crc32($id) % 100, crc32(strrev($id)) % 100), 'lastState' => $lastState, 'status' => $status,
             'createdAt' => '2026-10-20T09:00:00.000Z'];
+        $scripts = [
+            'lea_it01' => ['Touch 1 Call' => "Hi {{firstName}}, Jonathan from SwooScale. I saw Example MSSP is hiring a Business Analyst.\nWe have 3 analysts in Belgium available within a month. Worth a short chat?",
+                'Call-again' => 'Hi Ciso, Jonathan again: following up on the Business Analyst role.', 'Touch 2 mail' => 'Hi Ciso, Jonathan from SwooScale here. Call me back on 0470 12 34 56.',
+                'Final call' => 'Last try, Ciso: shall I send two profiles?', 'Internal note' => 'not used by any step'],
+            'lea_it02' => ['Touch 1 Call' => 'Hi Robin, Jonathan here.', 'Call-again' => "Hi Robin, Jonathan from SwooScale calling again.\nYou mentioned the Head of IT search: any update?",
+                'Touch 2 mail' => 'Robin, Jonathan from SwooScale. I will email you two profiles.'],
+            'lea_it04' => ['Touch 1 Call' => '', 'Call-again' => ''],
+            'lea_it05' => ['Final call' => 'Hi Mia, final call from Jonathan about the IT Director search.'],
+            'lea_hr01' => ['Touch 1 Call' => 'Hi Kim, Jonathan from SwooScale. Your HR team is hiring: can we help with IT profiles?'],
+        ];
         $this->leads = [
             'cam_it000001' => [
                 $lead('lea_it01', 'cam_it000001', 'Ciso', 'Example', 'Example MSSP', 'CISO', 'https://be.linkedin.com/in/Example-CISO/'),
@@ -83,6 +95,7 @@ final class MockLemlist
                 $lead('lea_hr03', 'cam_hr000001', 'Fin', 'Ished', 'Done NV', 'Talent Lead', 'https://www.linkedin.com/in/fin-ished', 'done', 'contacted'),
             ],
         ];
+        foreach ($this->leads as $cid => $rows) foreach ($rows as $i => $l) $this->leads[$cid][$i] += $scripts[$l['_id']] ?? [];
         $n = 0;
         $act = function (string $type, string $lead, string $cid, ?string $step, int $seqStep, int $total, string $at) use (&$n) {
             $n++;
@@ -119,10 +132,10 @@ final class MockLemlist
         }
         for ($i = 0; $i < 230; $i++) $act('emailsOpened', 'lea_it02', $it, 'stp_it_0', 0, 0, sprintf('2026-11-08T%02d:%02d:00Z', intdiv($i, 60) % 24, $i % 60)); // paging
         $this->tasks = [
-            ['_id' => 'opp_call0001', 'type' => 'phone', 'channel' => 'aircall', 'status' => 'due', 'title' => 'Call Ciso', 'message' => '', 'leadId' => 'lea_it01', 'contactId' => 'ctc_it01',
+            ['_id' => 'opp_call0001', 'type' => 'phone', 'channel' => 'aircall', 'status' => 'due', 'title' => 'Call +32 470 00 10 49', 'message' => '', 'stepId' => 'stp_it_3', 'leadId' => 'lea_it01', 'contactId' => 'ctc_it01',
                 'campaignId' => $it, 'assignedTo' => self::USER, 'dueDate' => '2026-11-12T09:00:00.000Z', 'manual' => false, 'leadFirstName' => 'Ciso', 'leadLastName' => 'Example',
                 'leadCompanyName' => 'Example MSSP', 'contact' => ['_id' => 'ctc_it01', 'phone' => '+32 470 11 22 33']],
-            ['_id' => 'opp_man00001', 'type' => 'manual', 'channel' => 'manual', 'status' => 'due', 'title' => 'Calling again', 'message' => 'Second call attempt', 'leadId' => 'lea_it02',
+            ['_id' => 'opp_man00001', 'type' => 'manual', 'channel' => 'manual', 'status' => 'due', 'title' => 'Calling Again +32 470 00 21 87', 'message' => 'Second call attempt', 'leadId' => 'lea_it02',
                 'contactId' => 'ctc_it02', 'campaignId' => $it, 'assignedTo' => self::USER, 'dueDate' => '2026-11-13T10:00:00.000Z', 'manual' => true, 'leadFirstName' => 'Robin',
                 'leadLastName' => 'Replier', 'leadCompanyName' => 'Replier BV'],
             ['_id' => 'opp_lis00001', 'type' => 'linkedinSend', 'channel' => 'linkedin', 'status' => 'upcoming', 'title' => 'LinkedIn message', 'message' => '', 'leadId' => 'lea_hr02',
@@ -137,6 +150,7 @@ final class MockLemlist
         $this->tasks[] = $task('opp_call0002', 'phone', 'due', 'Call Kim', 'lea_hr01', $hr, '2026-11-10T09:00:00.000Z', false, 'Kim', 'Example', 'Sample MSSP BV');
         $this->tasks[] = $task('opp_call0003', 'phone', 'upcoming', 'Call Nel', 'lea_it04', $it, '2026-12-01T13:00:00.000Z', false, 'Nel', 'New', 'Fresh BV');
         $this->tasks[] = $task('opp_fin00001', 'manual', 'due', 'Final call: Mia Meeting', 'lea_it05', $it, '2026-11-11T09:00:00.000Z', true, 'Mia', 'Meeting', 'Meet NV');
+        $this->tasks[] = $task('opp_vml00001', 'manual', 'upcoming', 'Voice mail +32 470 00 21 87', 'lea_it02', $it, '2026-11-20T09:00:00.000Z', true, 'Robin', 'Replier', 'Replier BV');
         $this->tasks[] = $task('opp_eml00001', 'email', 'due', 'Review & send email (step 6)', 'lea_it01', $it, '2026-11-12T15:00:00.000Z', true, 'Ciso', 'Example', 'Example MSSP');
         $this->tasks[] = $task('opp_ooo00001', 'manual', 'due', 'Out of office detected: check return date', 'lea_it07', $it, '2026-11-12T08:00:00.000Z', true, 'Pat', 'Paused', 'Hold NV');
         $this->tasks[] = $task('opp_vis00001', 'manual', 'upcoming', 'Visit LinkedIn profile', 'lea_hr03', $hr, '2026-12-02T09:00:00.000Z', true, 'Fin', 'Ished', 'Done NV');

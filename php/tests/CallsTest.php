@@ -65,9 +65,9 @@ test('calls: live call statuses split by "did they answer?" (Connected positive 
 test('calls: queue = phone tasks + manual tasks titled Call / Calling again / Final call, overdue first; manual list with types and an approximate preview', function () {
     [$d] = t_desk();
     $v = $d->view();
-    eq(['opp_call0002', 'opp_fin00001', 'opp_call0001', 'opp_man00001', 'opp_call0003'], array_column($v['queue'], 'id'), 'overdue first, then by due date');
-    eq(['phone', 'manualCall', 'phone', 'manualCall', 'phone'], array_column($v['queue'], 'kind'));
-    eq([true, true, true, false, false], array_column($v['queue'], 'overdue'));
+    eq(['opp_call0002', 'opp_fin00001', 'opp_call0001', 'opp_man00001', 'opp_vml00001', 'opp_call0003'], array_column($v['queue'], 'id'), 'overdue first, then by due date');
+    eq(['phone', 'manualCall', 'phone', 'manualCall', 'manualCall', 'phone'], array_column($v['queue'], 'kind'), 'Voice mail tasks are call tasks too');
+    eq([true, true, true, false, false, false], array_column($v['queue'], 'overdue'));
     $q = $v['queue'][2];
     eq('Ciso Example', $q['name']);
     eq('IT decision makers – Belgium', $q['campaign']);
@@ -77,7 +77,7 @@ test('calls: queue = phone tasks + manual tasks titled Call / Calling again / Fi
     eq(4, $v['counts']['manual'], 'due manual tasks (incl. the 2 call-type ones)');
     eq(6, $v['counts']['badge'], 'top-bar badge counts each open task once');
     $types = array_column($v['manual'], 'manualType', 'id');
-    eq(['opp_fin00001' => 'call', 'opp_ooo00001' => 'ooo', 'opp_eml00001' => 'email', 'opp_man00001' => 'call', 'opp_lis00001' => 'li', 'opp_vis00001' => 'visit'], $types);
+    eq(['opp_fin00001' => 'call', 'opp_ooo00001' => 'ooo', 'opp_eml00001' => 'email', 'opp_man00001' => 'call', 'opp_lis00001' => 'li', 'opp_vml00001' => 'call', 'opp_vis00001' => 'visit'], $types);
     $byId = array_column($v['manual'], null, 'id');
     eq('Hi Cas, happy to help with your IT hiring.', $byId['opp_lis00001']['preview']['text'], 'LinkedIn step of the HR campaign, {{firstName}} filled in');
     eq('Re: Your CISO search', $byId['opp_eml00001']['preview']['subject'], 'email step subject with {{jobTitle}} filled in');
@@ -379,4 +379,69 @@ test('calls: a positive call counts in the Outreach numbers (call answered, Inte
     eq($before['responses'] + 1, $after['responses'], 'a conversation (answered)');
     eq(1, $after['extra']['value'], 'a positive call');
     eq(['done' => 1, 'answered' => 1, 'positive' => 1], $d->today());
+});
+
+test('call scripts: {{variables}} filled from the lead (spaces and case ignored, standard fields, fallbacks, nested once); only used fields are stored', function () {
+    $vals = \SignalDesk\LeadVars::values(['first_name' => 'Lena', 'last_name' => 'V', 'company' => 'Northbridge', 'title' => 'CISO', 'phone' => '+32 470', 'email' => '', 'linkedin' => '',
+        'fields' => json_encode(['Touch 1 Call' => 'Hi {{firstName}}, Jonathan here.', 'Call-again' => 'Again, {{ companyName }}', 'Final call' => ''])]);
+    eq(['Hi Lena, Jonathan here.', []], \SignalDesk\LeadVars::fill('{{Touch 1 Call}}', $vals), 'names with spaces; nested {{firstName}} filled');
+    eq('Hi Lena, Jonathan here.', \SignalDesk\LeadVars::fill('{{ touch 1 call }}', $vals)[0], 'case and spacing ignored');
+    eq('Again, Northbridge', \SignalDesk\LeadVars::fill('{{Call-again}}', $vals)[0]);
+    eq(['{{Final call}}', ['Final call']], \SignalDesk\LeadVars::fill('{{Final call}}', $vals), 'empty field: stays as written, reported missing');
+    eq('Hello there', \SignalDesk\LeadVars::fill('Hello {{nickname|there}}', $vals)[0], 'fallback after |');
+    eq(['Touch 1 Call', 'firstName', 'Call-again'], \SignalDesk\LeadVars::names('{{Touch 1 Call}} {{firstName|you}} {{ Call-again }} {{firstName}}'));
+    eq('{"Touch 1 Call":"x","Call-again":"y"}', \SignalDesk\LeadVars::pick(['touch 1 call' => 'x', 'Call-again' => 'y', 'Internal note' => 'z', 'firstName' => 'L'], ['Touch 1 Call', 'Call-again', 'firstName']),
+        'only the custom fields steps use (standard ones live in their own columns)');
+    [$store] = t_lem_synced();
+    $f = json_decode((string) $store->one("SELECT fields FROM leads WHERE lead_id = 'lea_it01'"), true);
+    eq(['Touch 1 Call', 'Call-again', 'Touch 2 mail', 'Final call'], array_keys($f), 'synced from the lead export');
+    ok(!str_contains(json_encode($f), 'not used by any step'), 'unused custom fields are not stored');
+    ok(!str_contains(json_encode($store->all('SELECT * FROM tasks')), 'Jonathan from SwooScale'), 'scripts only in the leads table');
+});
+
+test('call scripts: each call task is matched to its step (stepId, sequence position, title pattern, type) and filled', function () {
+    $steps = [
+        ['step_id' => 's_call', 'type' => 'phone', 'main' => 1, 'seq_step' => 3, 'title' => 'Call {{phone}}', 'message' => '{{Touch 1 Call}}'],
+        ['step_id' => 's_again', 'type' => 'manual', 'main' => 1, 'seq_step' => 4, 'title' => 'Calling Again {{phone}}', 'message' => '{{Call-again}}'],
+        ['step_id' => 's_vm', 'type' => 'manual', 'main' => 0, 'seq_step' => 1, 'title' => 'Voice mail{{phone}}', 'message' => '<p>{{Touch 2 mail}}</p>'],
+        ['step_id' => 's_final', 'type' => 'manual', 'main' => 0, 'seq_step' => 2, 'title' => 'Final Call {{phone}}', 'message' => '{{Final call}}'],
+    ];
+    $t = fn (array $x) => $x + ['type' => 'manual', 'title' => '', 'step_id' => null, 'seq_step' => null];
+    eq('s_vm', CallDesk::stepFor($t(['step_id' => 's_vm', 'title' => 'whatever']), $steps)['step_id'], 'the stepId of the task wins');
+    eq('s_again', CallDesk::stepFor($t(['seq_step' => 4]), $steps)['step_id'], 'sequence position');
+    eq('s_again', CallDesk::stepFor($t(['title' => 'Calling again (phone)']), $steps)['step_id'], 'title pattern, case ignored');
+    eq('s_vm', CallDesk::stepFor($t(['title' => 'Voice mail (phone)']), $steps)['step_id']);
+    eq('s_final', CallDesk::stepFor($t(['title' => 'Final call: Mia Meeting']), $steps)['step_id']);
+    eq('s_call', CallDesk::stepFor($t(['type' => 'phone', 'title' => 'Ring them']), $steps)['step_id'], 'the only phone step');
+    [$d] = t_desk();
+    $q = array_column($d->view()['queue'], null, 'id');
+    eq("Hi Ciso, Jonathan from SwooScale. I saw Example MSSP is hiring a Business Analyst.\nWe have 3 analysts in Belgium available within a month. Worth a short chat?",
+        $q['opp_call0001']['context']['script']['text'], 'phone task (stepId) -> {{Touch 1 Call}} with {{firstName}} inside');
+    eq(['Touch 1 Call'], $q['opp_call0001']['context']['script']['fields']);
+    eq('Hi Ciso, Jonathan from SwooScale here. Call me back on 0470 12 34 56.', $q['opp_call0001']['context']['voicemail']['text'], 'voicemail script shown when the lead has it');
+    ok(str_starts_with($q['opp_man00001']['context']['script']['text'], 'Hi Robin, Jonathan from SwooScale calling again.'), '"Calling Again" task (title match) -> {{Call-again}}');
+    eq('Robin, Jonathan from SwooScale. I will email you two profiles.', $q['opp_vml00001']['context']['script']['text'], 'Voice mail task -> {{Touch 2 mail}}, HTML stripped');
+    eq(null, $q['opp_vml00001']['context']['voicemail'], 'no separate voicemail box on the voicemail task itself');
+    eq('Hi Mia, final call from Jonathan about the IT Director search.', $q['opp_fin00001']['context']['script']['text'], '"Final call" -> {{Final call}}');
+    eq('Hi Kim, Jonathan from SwooScale. Your HR team is hiring: can we help with IT profiles?', $q['opp_call0002']['context']['script']['text'], 'HR campaign');
+    $manual = array_column($d->view()['manual'], null, 'id');
+    eq($q['opp_man00001']['context']['script'], $manual['opp_man00001']['script'], 'the same script on the manual task list');
+    eq($q['opp_vml00001']['context']['script']['text'], $manual['opp_vml00001']['script']['text']);
+});
+
+test('call scripts: an empty field gives "no script" with the raw step text; a changed field in lemlist updates the script at the next sync; never in the audit log', function () {
+    [$d, $store, $mock, , $client] = t_desk();
+    $q = array_column($d->view()['queue'], null, 'id');
+    $s = $q['opp_call0003']['context']['script'];
+    eq(true, $s['empty'], 'Nel has an empty "Touch 1 Call"');
+    eq(null, $s['text']);
+    eq('{{Touch 1 Call}}', $s['raw'], 'the raw step text is shown instead');
+    eq(null, $q['opp_call0003']['context']['voicemail']);
+    foreach ($mock->leads['cam_it000001'] as $i => $l) if ($l['_id'] === 'lea_it04') $mock->leads['cam_it000001'][$i]['Touch 1 Call'] = 'Hi Nel, Jonathan from SwooScale: new script.';
+    t_out_resync($store, $mock, $client);
+    $q = array_column($d->view()['queue'], null, 'id');
+    eq('Hi Nel, Jonathan from SwooScale: new script.', $q['opp_call0003']['context']['script']['text'], 'refreshed at the next sync');
+    $d->logCall(['taskId' => 'opp_call0003', 'attempt' => t_attempt('scr'), 'answered' => true, 'status' => 'connected-neutral', 'note' => '']);
+    $log = json_encode($GLOBALS['__events']);
+    foreach (['new script', 'Jonathan from SwooScale', 'Touch 1 Call'] as $txt) ok(!str_contains($log, $txt), "audit has no $txt");
 });

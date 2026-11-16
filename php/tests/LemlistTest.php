@@ -158,14 +158,15 @@ test('lemlist sync: team, call statuses, running campaigns only, steps incl. con
     [$store, $mock] = t_lem_synced();
     eq(['cam_hr000001', 'cam_it000001'], array_column($store->all('SELECT id FROM campaigns ORDER BY id'), 'id'), 'the paused campaign is skipped');
     eq(6, (int) $store->one("SELECT total_steps FROM campaigns WHERE id = 'cam_it000001'"));
-    eq(8, (int) $store->one("SELECT COUNT(*) FROM steps WHERE campaign_id = 'cam_it000001'"), '6 main steps + 2 branch steps');
+    eq(10, (int) $store->one("SELECT COUNT(*) FROM steps WHERE campaign_id = 'cam_it000001'"), '6 main steps + 4 branch steps');
+    eq('Call (phone)', $store->one("SELECT title FROM tasks WHERE id = 'opp_call0001'"), 'phones never stay in task titles');
     eq('Accepted / Else', $store->one("SELECT label FROM steps WHERE step_id = 'stp_it_2'"));
     eq(10, (int) $store->one('SELECT COUNT(*) FROM leads'));
     $l = $store->all("SELECT * FROM leads WHERE lead_id = 'lea_it01'")[0];
     eq(['in/example-ciso', 'ciso.example@mail.example', 'Example MSSP'], [$l['linkedin_key'], $l['email'], $l['company']]);
     eq(count($mock->activities), (int) $store->one('SELECT COUNT(*) FROM activities'));
     ok(count(array_filter($mock->calls, fn ($c) => $c[1] === '/activities')) >= 3, 'activities read in pages of 100');
-    eq(['opp_call0001', 'opp_call0002', 'opp_call0003', 'opp_eml00001', 'opp_fin00001', 'opp_lis00001', 'opp_man00001', 'opp_ooo00001', 'opp_vis00001'],
+    eq(['opp_call0001', 'opp_call0002', 'opp_call0003', 'opp_eml00001', 'opp_fin00001', 'opp_lis00001', 'opp_man00001', 'opp_ooo00001', 'opp_vis00001', 'opp_vml00001'],
         array_column($store->all("SELECT id FROM tasks WHERE status IN ('due','upcoming','paused') ORDER BY id"), 'id'), 'open tasks only');
     eq('+32 470 00 ' . sprintf('%02d %02d', crc32('lea_it01') % 100, crc32(strrev('lea_it01')) % 100), $store->one("SELECT phone FROM leads WHERE lead_id = 'lea_it01'"), 'the lead phone from the export is kept');
     eq(9, (int) $store->one('SELECT COUNT(*) FROM call_statuses'));

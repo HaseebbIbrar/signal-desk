@@ -254,6 +254,12 @@ SQL);
         // added in Phase 2: campaigns that stop running are hidden but keep their history
         $cols = array_column($this->db->query('PRAGMA table_info(campaigns)')->fetchAll(), 'name');
         if (!in_array('running', $cols, true)) $this->db->exec('ALTER TABLE campaigns ADD COLUMN running INTEGER DEFAULT 1');
+        // call scripts: the lead's custom fields used by the campaign's steps (JSON), and the step a task belongs to
+        $cols = array_column($this->db->query('PRAGMA table_info(leads)')->fetchAll(), 'name');
+        if (!in_array('fields', $cols, true)) $this->db->exec('ALTER TABLE leads ADD COLUMN fields TEXT');
+        $cols = array_column($this->db->query('PRAGMA table_info(tasks)')->fetchAll(), 'name');
+        if (!in_array('step_id', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN step_id TEXT');
+        if (!in_array('seq_step', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN seq_step INTEGER');
         // added in Phase 3: resumable call logs (call logged, then the task updated)
         $cols = array_column($this->db->query('PRAGMA table_info(calls)')->fetchAll(), 'name');
         foreach (['answered INTEGER', 'task_done INTEGER', 'callback_at TEXT', 'kind TEXT'] as $col) {

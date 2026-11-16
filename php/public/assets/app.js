@@ -1147,6 +1147,37 @@
         if (t.markedRead) (st.inbox.list || []).forEach(function (x) { if (x.contactId === contactId && x.unread) { x.unread = false; st.inbox.unread = Math.max(0, st.inbox.unread - 1); } });
       }, function (e) { st.inbox.error = e.message; }).then(render);
     }
+    // the call script (the step's lead variable, filled in) with a Copy button; the raw step text when the lead has none
+    function copyBtn(text) {
+      var b = h("button", { type: "button", class: "sd-btn sd-btn-sm", text: "Copy" });
+      b.addEventListener("click", function () {
+        var ok = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1500); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, function () { b.textContent = "Copy failed"; });
+        else {
+          var ta = h("textarea", { class: "sr-only", "aria-hidden": "true" });
+          ta.value = text; document.body.appendChild(ta); ta.select();
+          try { document.execCommand("copy"); ok(); } catch (e) { b.textContent = "Copy failed"; }
+          ta.remove();
+        }
+      });
+      return b;
+    }
+    function scriptBox(sc) {
+      if (!sc) return null;
+      var box = h("div", { class: "sd-k-script", role: "region", "aria-label": "Call script" });
+      box.appendChild(h("div", { class: "sd-o-between" }, h("span", { class: "sd-k-script-label" }, "Call script",
+        sc.fields && sc.fields.length ? h("span", { class: "sd-k-script-field", text: " · " + sc.fields.join(", ") }) : null), sc.empty ? null : copyBtn(sc.text)));
+      if (sc.empty) {
+        box.appendChild(h("p", { class: "sd-k-script-text sd-muted", text: "No script for this lead." }));
+        box.appendChild(h("p", { class: "sd-k-script-raw" }, h("span", { class: "sd-k-approx", text: "Step text in lemlist" }), sc.raw));
+      } else box.appendChild(h("p", { class: "sd-k-script-text", text: sc.text }));
+      return box;
+    }
+    function voicemailBox(vm) {
+      if (!vm) return null;
+      return h("details", { class: "sd-k-vm" }, h("summary", { class: "sd-k-vm-sum", text: "If no answer: voicemail" }),
+        h("div", { class: "sd-k-vm-body" }, h("p", { class: "sd-k-script-text", text: vm.text }), h("div", null, copyBtn(vm.text))));
+    }
     function resetCall() { st.ans = null; st.res = null; st.note = ""; st.cb = ""; st.attempt = newAttempt(); }
     function setSub(s) {
       st.sub = s; st.msg = null;
@@ -1225,6 +1256,10 @@
       var li = safeHref(c.linkedin);
       box.appendChild(h("div", { class: "sd-o-stack-xxs sd-o-gap4" }, h("span", { class: "sd-k-eyebrow", text: "Now calling" }), h("span", { class: "sd-k-name", text: cur.name }),
         h("span", { class: "sd-muted sd-o-small13", text: [cur.jobTitle, cur.company].filter(Boolean).join(" · ") }), h("span", { class: "sd-o-small13", text: "Context: " + parts.join(". ") + "." })));
+      var sb = scriptBox(c.script);
+      if (sb) box.appendChild(sb);
+      var vb = voicemailBox(c.voicemail);
+      if (vb) box.appendChild(vb);
       box.appendChild(h("div", { class: "sd-o-wrap" },
         tel ? h("a", { href: tel, class: "sd-k-callbtn", text: "Call " + c.phone }) : h("span", { class: "sd-k-nophone sd-muted", text: "No phone number in lemlist" }),
         li ? h("a", { href: li, target: "_blank", rel: "noopener noreferrer", class: "sd-btn-link", text: "LinkedIn" }) : null));
@@ -1290,7 +1325,9 @@
         var left = h("div", { class: "sd-k-mleft" }, h("span", { class: "sd-k-type " + t[1], text: typeLabel }),
           h("div", { class: "sd-o-stack-xxs" }, h("span", { class: "sd-o-strong", text: m.title || typeLabel }),
             h("span", { class: "sd-muted sd-o-small", text: [m.name, m.company, m.campaign].filter(Boolean).join(" · ") }),
-            m.preview ? h("span", { class: "sd-k-preview" }, h("span", { class: "sd-k-approx", text: "Approximate preview" }), (m.preview.subject ? "Subject: " + m.preview.subject + "\n" : "") + m.preview.text) : null));
+            m.preview ? h("span", { class: "sd-k-preview" }, h("span", { class: "sd-k-approx", text: "Approximate preview" }), (m.preview.subject ? "Subject: " + m.preview.subject + "\n" : "") + m.preview.text) : null,
+            m.script ? h("span", { class: "sd-k-preview sd-k-preview-call" }, h("span", { class: "sd-k-approx", text: m.script.empty ? "No script for this lead · step text" : "Call script" }),
+              m.script.empty ? m.script.raw : m.script.text) : null));
         var right = h("div", { class: "sd-o-wrap" }, h("span", { class: "sd-k-due" + (du.late ? " sd-k-late" : " sd-muted"), text: du.text }));
         if (closed) right.appendChild(h("span", { class: "sd-k-closed sd-pill-fill " + (closed === "Skipped" || closed === "Preview" ? "sd-c-fin" : "sd-c-int"), text: closed }));
         else {

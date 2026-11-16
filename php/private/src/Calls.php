@@ -43,7 +43,8 @@ final class CallDeskLimiter
 
 final class CallDesk
 {
-    public const CALL_TITLE = '/^\s*(call|calling again|final call)\b/i';
+    public const CALL_TITLE = '/^\s*(call|calling again|final call|voice\s*mail)/i';
+    public const VOICEMAIL_TITLE = '/voice\s*mail/i';
     public const MESSAGE_TYPES = ['email', 'linkedinSend', 'linkedinInvite', 'linkedinVoiceNote', 'whatsappMessage'];
     public const OPEN = ['due', 'upcoming'];
     public const REFRESH_EVERY = 60;     // tasks re-read from lemlist at most once a minute (and after every action)
@@ -215,11 +216,69 @@ final class CallDesk
         $pick = null;
         foreach ($cands as $s) if ((int) $s['main'] === 1 && (int) $s['seq_step'] >= $next) { $pick = $s; break; }
         $pick ??= $cands[0];
-        $vars = ['firstName' => $l['first_name'] ?? '', 'lastName' => $l['last_name'] ?? '', 'companyName' => $l['company'] ?? '', 'jobTitle' => $l['title'] ?? '',
-            'linkedinUrl' => $l['linkedin'] ?? ''];
-        $fill = fn (string $s) => preg_replace_callback('/\{\{\s*([A-Za-z]+)\s*\}\}/', fn ($m) => array_key_exists($m[1], $vars) && $vars[$m[1]] !== '' ? $vars[$m[1]] : $m[0], $s) ?? $s;
+        $values = LeadVars::values($l);
+        $fill = fn (string $s) => LeadVars::fill($s, $values)[0];
         $subject = trim((string) $pick['title']) !== '' && $t['type'] === 'email' ? $fill((string) $pick['title']) : null;
         return ['subject' => $subject, 'text' => $fill(self::plain((string) $pick['message']))];
+    }
+
+    /**
+     * The campaign step a task belongs to: the task's stepId, else its sequence position, else the step whose title pattern
+     * ("Calling Again {{phone}}") matches the task title, else the only / next step of that type.
+     */
+    public static function stepFor(array $task, array $steps, int $next = 0): ?array
+    {
+        $byId = array_column($steps, null, 'step_id');
+        if (!empty($task['step_id']) && isset($byId[$task['step_id']])) return $byId[$task['step_id']];
+        $sameType = array_values(array_filter($steps, fn ($st) => $st['type'] === $task['type']));
+        if (isset($task['seq_step']) && $task['seq_step'] !== null && $task['seq_step'] !== '') {
+            foreach ($sameType as $st) if ((int) $st['seq_step'] === (int) $task['seq_step'] && (int) $st['main'] === 1) return $st;
+        }
+        $pick = function (array $c) use ($next): ?array {
+            if (!$c) return null;
+            usort($c, fn ($a, $b) => [(int) $b['main'], (int) $a['seq_step']] <=> [(int) $a['main'], (int) $b['seq_step']]);
+            foreach ($c as $st) if ((int) $st['main'] === 1 && (int) $st['seq_step'] >= $next) return $st;
+            return $c[0];
+        };
+        $title = trim((string) $task['title']);
+        $byTitle = array_values(array_filter($sameType, fn ($st) => trim((string) $st['title']) !== '' && preg_match(self::titlePattern((string) $st['title']), $title)));
+        if ($byTitle) return $pick($byTitle);
+        return count($sameType) === 1 ? $sameType[0] : $pick($sameType);
+    }
+
+    /** "Calling Again {{phone}}" -> /^calling\s*again\b.*$/i (variables match anything, spacing and case are ignored). */
+    private static function titlePattern(string $stepTitle): string
+    {
+        $parts = preg_split('/\{\{[^{}]*\}\}/', $stepTitle) ?: [$stepTitle];
+        $re = implode('.*', array_map(fn ($p) => implode('\s*', array_map(fn ($w) => preg_quote($w, '/'), preg_split('/\s+/', trim($p)) ?: [])), $parts));
+        return '/^\s*' . $re . '.*$/isu';
+    }
+
+    /**
+     * The call script for a call task: the step's message with the lead's fields filled in (HTML stripped). When the script
+     * field is empty for this lead: empty=true and the raw step text.
+     * @return array{text:?string,raw:string,empty:bool,fields:array,step:?string}|null
+     */
+    public static function script(?array $step, ?array $lead): ?array
+    {
+        if (!$step || trim((string) $step['message']) === '') return null;
+        $raw = self::plain((string) $step['message']);
+        [$text, $missing] = LeadVars::fill($raw, LeadVars::values($lead));
+        $text = trim($text);
+        $onlyVars = trim((string) preg_replace('/\{\{[^{}]*\}\}/', '', $raw)) === '';
+        $empty = $text === '' || ($missing && $onlyVars);
+        return ['text' => $empty ? null : $text, 'raw' => $raw, 'empty' => $empty, 'fields' => LeadVars::names($raw), 'step' => trim((string) $step['title']) ?: null];
+    }
+
+    /** The lead's voicemail script (the campaign's "Voice mail" step), when it has one and it is not the current step. */
+    private static function voicemail(array $steps, ?array $current, ?array $lead): ?array
+    {
+        foreach ($steps as $st) {
+            if (!preg_match(self::VOICEMAIL_TITLE, (string) $st['title']) || ($current && $st['step_id'] === $current['step_id'])) continue;
+            $sc = self::script($st, $lead);
+            if ($sc && !$sc['empty']) return $sc;
+        }
+        return null;
     }
 
     /** HTML message -> plain text with line breaks. */
@@ -284,10 +343,14 @@ final class CallDesk
         foreach ($this->openTasks() as $x) {
             $k = self::kind($x['task']);
             $b = $this->brief($x);
-            if ($k === 'phone' || $k === 'manualCall') $queue[] = $b + ['context' => $this->context($x)];
+            $isCall = $k === 'phone' || $k === 'manualCall';
+            $step = $isCall ? self::stepFor($x['task'], $x['steps'], (int) $x['level']['n']) : null;
+            $script = $isCall ? self::script($step, $x['lead']) : null;
+            if ($isCall) $queue[] = $b + ['context' => $this->context($x) + ['script' => $script, 'voicemail' => self::voicemail($x['steps'], $step, $x['lead'])]];
             if ($x['task']['type'] !== 'phone' && ($x['task']['type'] === 'manual' || (int) $x['task']['manual'] === 1)) {
                 $m = $b + ['manualType' => self::manualType($x['task'])];
                 if ($k === 'message') $m['preview'] = $this->messagePreview($x);
+                if ($k === 'manualCall') $m['script'] = $script;
                 $manual[] = $m;
             }
         }
