@@ -11,6 +11,7 @@ use SignalDesk\CallDesk;
 use SignalDesk\CallDeskLimiter;
 use SignalDesk\Config;
 use SignalDesk\LemlistStore;
+use SignalDesk\LemlistSync;
 use SignalDesk\LemlistWebhook;
 use SignalDesk\MockLemlist;
 use SignalDesk\Outreach;
@@ -220,6 +221,84 @@ test('calls: inbox lists conversations (unread, our label), opens a thread (mark
     eq(true, $mock->inbox['ctc_it02']['users'][0]['read']);
     eq(false, $d->thread('ctc_ext01')['canLinkedin'], 'not a campaign lead');
     throws(fn () => $d->reply(['contactId' => 'ctc_ext01', 'channel' => 'linkedin', 'message' => 'hi', 'confirm' => true]), ValidationError::class, 'campaign leads only');
+});
+
+test('inbox matching: the lead export has no contactId, so conversations match by contactId from tasks/activities, and it is stored on the lead', function () {
+    [$d, $store, , , $client] = t_desk();
+    eq(0, (int) $store->one("SELECT COUNT(*) FROM leads WHERE contact_id <> ''"), 'like live: the export gives no contactId');
+    $by = array_column($d->inbox()['conversations'], null, 'contactId');
+    eq(['lea_it02', 'Replier BV', 'IT decision makers – Belgium', true, true], [$by['ctc_it02']['leadId'], $by['ctc_it02']['company'], $by['ctc_it02']['campaign'], $by['ctc_it02']['inCampaign'], $by['ctc_it02']['canLinkedin']]);
+    eq(['lea_hr02', 'Link BV', 'HR decision makers – Belgium'], [$by['ctc_hr02']['leadId'], $by['ctc_hr02']['company'], $by['ctc_hr02']['campaign']]);
+    eq([null, false, false, ''], [$by['ctc_ext01']['leadId'], $by['ctc_ext01']['inCampaign'], $by['ctc_ext01']['canLinkedin'], $by['ctc_ext01']['campaign']], 'truly no match: "Not in a campaign"');
+    eq('ctc_it02', $store->one("SELECT contact_id FROM leads WHERE lead_id = 'lea_it02'"), 'contactId stored per lead');
+    // the next sync (export without contactId) keeps it
+    $sync = new LemlistSync($client, $store);
+    $sync->now = fn () => 1_794_500_000;
+    eq('done', $sync->run(600)['result']);
+    eq('ctc_it02', $store->one("SELECT contact_id FROM leads WHERE lead_id = 'lea_it02'"));
+    // snippet: lemlist's one-line previews, the newest one, plain text
+    eq('Hi Jonathan, timing is good.', $by['ctc_it02']['snippet']);
+    eq('Interesting. Call me this week, mornings are best.', $by['ctc_hr02']['snippet']);
+});
+
+test('inbox matching: email fallback, the same person in two running campaigns (+1 more, newest running first), LinkedIn reply enabled after the match', function () {
+    $m = new MockLemlist();
+    $m->addDemoContacts();
+    [$d, $store, $mock] = t_desk([], 'jp@x.test', $m);
+    $c = array_column($d->inbox()['conversations'], null, 'contactId')['ctc_scope0001'];
+    eq(['lea_it28', 'Scope Cooling', 'Thursday MPC 2', 1, true, true], [$c['leadId'], $c['company'], $c['campaign'], $c['more'], $c['inCampaign'], $c['canLinkedin']]);
+    eq(2, (int) $store->one("SELECT COUNT(*) FROM leads WHERE contact_id = 'ctc_scope0001'"), 'both campaigns remember the contactId');
+    $mock->campaigns[3]['status'] = 'paused';
+    $store->db->exec("UPDATE campaigns SET status = 'paused' WHERE id = 'cam_it000002'");
+    eq(['lea_it08', 'IT decision makers – Belgium', 1], (fn ($x) => [$x['leadId'], $x['campaign'], $x['more']])(array_column($d->inbox()['conversations'], null, 'contactId')['ctc_scope0001']), 'a running campaign wins over a newer paused one');
+    $t = $d->thread('ctc_scope0001');
+    eq([true, 'lea_it08', 'Manager Data & Analytics'], [$t['canLinkedin'], $t['leadId'], $t['jobTitle']]);
+    $from = count($mock->calls);
+    eq(true, $d->reply(['contactId' => 'ctc_scope0001', 'channel' => 'linkedin', 'message' => 'See you Tuesday', 'confirm' => true])['ok']);
+    eq([['POST', '/inbox/linkedin', ['sendUserId' => MockLemlist::USER, 'leadId' => 'lea_it08', 'contactId' => 'ctc_scope0001', 'message' => 'See you Tuesday']]], t_lem_writes($mock, $from));
+    // LinkedIn URL fallback (no email in the conversation)
+    $store->db->exec("UPDATE leads SET signal_track = 'HR', signal_job_title = 'Talent Acquisition Lead' WHERE lead_id = 'lea_hr01'");
+    $k = array_column($d->inbox()['conversations'], null, 'contactId')['ctc_kimli0001'];
+    eq(['lea_hr01', 'Sample MSSP BV', true, 'HR · Talent Acquisition Lead'], [$k['leadId'], $k['company'], $k['canLinkedin'], $k['signal']], 'job signal shown with its track');
+    // never another lemlist contact's lead: same email, but that lead already belongs to ctc_it02
+    $mock->inbox['ctc_other001'] = ['_id' => 'ibx_other001', 'contactId' => 'ctc_other001', 'leadId' => '', 'email' => 'robin.replier@mail.example', 'channels' => ['email'],
+        'lastActivityAt' => '2026-11-01T08:00:00.000Z', 'lastRepliedChannel' => 'email', 'users' => [], 'contact' => ['fullName' => 'Robin R.'], 'labels' => [],
+        'thread' => [['_id' => 'act_o1', 'type' => 'emailsReplied', 'createdAt' => '2026-11-01T08:00:00.000Z', 'message' => 'x']]];
+    eq(false, array_column($d->inbox()['conversations'], null, 'contactId')['ctc_other001']['inCampaign']);
+});
+
+test('inbox snippet: latest message, HTML stripped, cut at 90; cached when a thread opens and from reply webhooks; never logged', function () {
+    $m = new MockLemlist();
+    $m->addDemoContacts();
+    [$d, $store, $mock] = t_desk([], 'jp@x.test', $m);
+    $c = fn () => array_column($d->inbox()['conversations'], null, 'contactId');
+    eq('You: Hi Sam,', $c()['ctc_scope0001']['snippet'], 'before opening: lemlist\'s own one-line preview of the newest message (ours)');
+    $GLOBALS['__events'] = [];
+    $d->thread('ctc_scope0001');
+    $sn = $c()['ctc_scope0001']['snippet'];
+    eq('You: Hi Sam, Thanks for coming back to me. I will send his CV this afternoon.', $sn, 'after opening: the whole last message, plain text');
+    ok(!str_contains($sn, '<'), 'no HTML');
+    $long = '<p>' . str_repeat('Interesting profile, please send it over. ', 5) . '</p>';
+    eq(90, mb_strlen(CallDesk::snippet($long)));
+    ok(str_ends_with(CallDesk::snippet($long), '…'));
+    // a reply arrives by webhook: it becomes the snippet
+    $cfg = t_lem_config();
+    LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'act_hk_scope', 'type' => 'emailsReplied', 'secret' => T_LEM_SECRET, 'contactId' => 'ctc_scope0001', 'leadId' => 'lea_it08',
+        'createdAt' => '2026-11-16T12:00:00.000Z', 'text' => "Great,\nthanks! Tuesday 10:00 works for me."]), $store, fn () => T_CALL_NOW);
+    $mock->inbox['ctc_scope0001']['lastActivityAt'] = '2026-11-16T12:00:00.000Z';
+    eq('Great, thanks! Tuesday 10:00 works for me.', $c()['ctc_scope0001']['snippet']);
+    $log = json_encode($GLOBALS['__events']);
+    ok(!str_contains($log, 'Tuesday 10:00') && !str_contains($log, 'coming back to me'), 'message text never in the audit log');
+});
+
+test('inbox labels feed Outreach for the matched lead (label set here, or already set in lemlist)', function () {
+    $m = new MockLemlist();
+    $m->addDemoContacts();
+    [$d, $store, $mock] = t_desk([], 'jp@x.test', $m);
+    $d->inbox();
+    eq('Interested', $store->one("SELECT outcome FROM outcomes WHERE lead_id = 'lea_it05'"), 'Interested label already set in lemlist');
+    eq(true, $d->label(['contactId' => 'ctc_scope0001', 'label' => 'Meeting'])['ok']);
+    eq('Meeting', $store->one("SELECT outcome FROM outcomes WHERE lead_id = 'lea_it28'"), 'the email-matched lead gets the outcome');
 });
 
 test('calls: replies need the confirm step; email in the latest thread from the sender mailbox, LinkedIn with lead + contact; no message text in the audit log', function () {

@@ -581,6 +581,90 @@ final class CallDesk
         return array_values(array_filter(array_map(fn ($l) => is_array($l) ? (string) ($l['_id'] ?? '') : (string) $l, (array) $raw)));
     }
 
+    /** What a conversation says about its contact, to find the lead when lemlist did not give us the contactId (its lead export has none). */
+    private static function convHints(array $c): array
+    {
+        $contact = is_array($c['contact'] ?? null) ? $c['contact'] : [];
+        $ids = array_merge(is_string($c['leadId'] ?? null) ? [$c['leadId']] : [], array_filter((array) ($c['leadIds'] ?? []), 'is_string'));
+        return ['email' => (string) ($c['contactEmail'] ?? $contact['email'] ?? $c['email'] ?? ''),
+            'linkedin' => (string) ($c['contactLinkedinUrl'] ?? $contact['linkedinUrl'] ?? $c['linkedinUrl'] ?? ''), 'leadIds' => array_values(array_filter($ids))];
+    }
+
+    /**
+     * The campaign leads of one inbox contact, best first (running campaign, then most recently added).
+     * Found by contactId (lead export, tasks, activities, webhook events, leadIds lemlist gives), then email, then LinkedIn URL;
+     * then widened to the same person's leads in other campaigns. The contactId is stored on the leads found, so the next lookup is direct.
+     * @return list<array<string,mixed>>
+     */
+    private function leadsFor(string $contactId, array $hints = []): array
+    {
+        $sel = 'SELECT l.*, c.status AS camp_status FROM leads l LEFT JOIN campaigns c ON c.id = l.campaign_id WHERE ';
+        $in = fn (array $ids) => implode(',', array_fill(0, count($ids), '?'));
+        $free = "(l.contact_id IS NULL OR l.contact_id = '' OR l.contact_id = ?)"; // never take another lemlist contact's lead
+        $rows = $this->store->all($sel . 'l.contact_id = ?', [$contactId]);
+        if (!$rows) {
+            $ids = array_column($this->store->all("SELECT lead_id FROM tasks WHERE contact_id = ? AND lead_id <> '' UNION SELECT lead_id FROM activities WHERE contact_id = ? AND lead_id IS NOT NULL
+                UNION SELECT lead_id FROM events WHERE contact_id = ? AND lead_id IS NOT NULL", [$contactId, $contactId, $contactId]), 'lead_id');
+            $ids = array_values(array_unique(array_merge($ids, $hints['leadIds'] ?? [])));
+            if ($ids) $rows = $this->store->all($sel . "l.lead_id IN ({$in($ids)}) AND $free", [...$ids, $contactId]);
+        }
+        $email = strtolower(trim((string) ($hints['email'] ?? '')));
+        if (!$rows && str_contains($email, '@')) $rows = $this->store->all($sel . "l.email = ? COLLATE NOCASE AND $free", [$email, $contactId]);
+        $key = LinkedIn::profileKey((string) ($hints['linkedin'] ?? ''));
+        if (!$rows && $key) $rows = $this->store->all($sel . "l.linkedin_key = ? AND $free", [$key, $contactId]);
+        if (!$rows) return [];
+        // the same person in other campaigns (same email or LinkedIn profile)
+        $emails = array_values(array_unique(array_filter(array_map(fn ($l) => strtolower((string) $l['email']), $rows))));
+        $keys = array_values(array_unique(array_filter(array_column($rows, 'linkedin_key'))));
+        $or = [];
+        $args = [];
+        if ($emails) { $or[] = "lower(l.email) IN ({$in($emails)})"; array_push($args, ...$emails); }
+        if ($keys) { $or[] = "l.linkedin_key IN ({$in($keys)})"; array_push($args, ...$keys); }
+        if ($or) {
+            $byId = array_column($rows, null, 'lead_id');
+            foreach ($this->store->all($sel . '(' . implode(' OR ', $or) . ") AND $free", [...$args, $contactId]) as $l) $byId[$l['lead_id']] ??= $l;
+            $rows = array_values($byId);
+        }
+        $todo = array_values(array_filter(array_column(array_filter($rows, fn ($l) => (string) $l['contact_id'] !== $contactId), 'lead_id')));
+        if ($todo) $this->store->db->prepare("UPDATE leads SET contact_id = ? WHERE lead_id IN ({$in($todo)})")->execute([$contactId, ...$todo]);
+        usort($rows, fn ($a, $b) => [strtolower((string) $b['camp_status']) === 'running', (string) $b['added_at']] <=> [strtolower((string) $a['camp_status']) === 'running', (string) $a['added_at']]);
+        return $rows;
+    }
+
+    private static function signalOf(?array $lead): ?string
+    {
+        return $lead && $lead['signal_job_title'] ? ($lead['signal_track'] ?: 'IT') . ' · ' . $lead['signal_job_title'] : null;
+    }
+
+    /** One line for the inbox list: plain text, whitespace folded, at most 90 characters. */
+    public static function snippet(string $text): string
+    {
+        $t = trim((string) preg_replace('/\s+/u', ' ', self::plain($text)));
+        return mb_strlen($t) > 90 ? rtrim(mb_substr($t, 0, 89)) . '…' : $t;
+    }
+
+    /** The newest of: lemlist's own previews of the last reply / last sent message, and the line cached from the webhook or an opened thread. */
+    private function snippetOf(string $contactId, array $c): string
+    {
+        $cands = [];
+        $last = is_array($c['messages'] ?? null) && $c['messages'] ? end($c['messages']) : null;
+        if (is_array($last)) $cands[] = [(string) ($last['body'] ?? $last['message'] ?? ''), (string) ($last['sentAt'] ?? $last['createdAt'] ?? ''), 2];
+        foreach ([['lastRepliedMessagePreview', 'lastRepliedAt', ''], ['lastSentMessagePreview', 'lastSentAt', 'You: '], ['lastMessagePreview', 'lastActivityAt', '']] as [$k, $at, $pre]) {
+            if (is_string($c[$k] ?? null) && trim($c[$k]) !== '') $cands[] = [$pre . $c[$k], (string) ($c[$at] ?? ''), 1];
+        }
+        $cached = $this->store->all('SELECT text, at FROM snippets WHERE contact_id = ?', [$contactId])[0] ?? null;
+        if ($cached) $cands[] = [(string) $cached['text'], (string) $cached['at'], 3]; // same moment: the cached line is the fuller one
+        $cands = array_filter($cands, fn ($x) => trim($x[0]) !== '');
+        if (!$cands) return '';
+        usort($cands, fn ($a, $b) => [self::ts($b[1]), $b[2]] <=> [self::ts($a[1]), $a[2]]);
+        return self::snippet(reset($cands)[0]);
+    }
+
+    private static function ts(string $iso): int
+    {
+        return $iso !== '' ? (int) strtotime($iso) : 0;
+    }
+
     /** Conversations (live from lemlist, nothing stored) with lead, campaign, channel, unread and labels. */
     public function inbox(string $filter = 'all'): array
     {
@@ -593,20 +677,27 @@ final class CallDesk
         foreach ($r['data'] ?? [] as $c) {
             $cid = (string) ($c['contactId'] ?? '');
             if ($cid === '') continue;
-            $lead = $this->store->all('SELECT * FROM leads WHERE contact_id = ? ORDER BY added_at DESC LIMIT 1', [$cid])[0] ?? null;
+            $leads = $this->leadsFor($cid, self::convHints($c));
+            $lead = $leads[0] ?? null;
             $unread = false;
             foreach ($c['users'] ?? [] as $u) if (($u['userId'] ?? '') === $sender['userId'] && empty($u['read'])) $unread = true;
             $ids = self::convLabels($c);
             $names2 = $ids === null ? [] : $this->labelNames($ids, $labels['all']);
             $ourLabel = null;
             foreach ($names2 as $n) if (in_array($n, LemlistGuard::LABELS, true)) $ourLabel = $n;
-            $last = $c['messages'][count($c['messages'] ?? []) - 1] ?? null;
-            $snippet = $last ? mb_substr(self::plain((string) ($last['body'] ?? $last['message'] ?? '')), 0, 120) : '';
+            if ($lead && $ourLabel !== null && isset(self::OUR_LABEL_OUTCOME[$ourLabel]) && !$this->store->one('SELECT 1 FROM outcomes WHERE lead_id = ?', [$lead['lead_id']])) {
+                $this->setOutcome((string) $lead['lead_id'], self::OUR_LABEL_OUTCOME[$ourLabel]); // a label set in lemlist counts in Outreach too
+            }
             $channel = (string) ($c['lastRepliedChannel'] ?? ($c['channels'][0] ?? 'email'));
-            $name = trim((string) ($c['contact']['fullName'] ?? '')) ?: ($lead ? trim($lead['first_name'] . ' ' . $lead['last_name']) : '') ?: 'Unknown contact';
-            $out[] = ['contactId' => $cid, 'leadId' => $lead['lead_id'] ?? null, 'name' => $name, 'company' => $lead['company'] ?? '', 'campaign' => $lead ? ($names[$lead['campaign_id']] ?? '') : '',
+            $contact = is_array($c['contact'] ?? null) ? $c['contact'] : [];
+            $name = trim((string) ($c['contactName'] ?? $contact['fullName'] ?? trim(($contact['firstName'] ?? '') . ' ' . ($contact['lastName'] ?? ''))))
+                ?: ($lead ? trim($lead['first_name'] . ' ' . $lead['last_name']) : '') ?: 'Unknown contact';
+            $out[] = ['contactId' => $cid, 'leadId' => $lead['lead_id'] ?? null, 'name' => $name,
+                'company' => $lead['company'] ?? (string) ($c['contactCompanyName'] ?? $contact['companyName'] ?? ''),
+                'campaign' => $lead ? ($names[$lead['campaign_id']] ?? '') : '', 'more' => max(0, count(array_unique(array_column($leads, 'campaign_id'))) - 1),
+                'signal' => self::signalOf($lead), 'inCampaign' => $lead !== null, 'canLinkedin' => $lead !== null,
                 'channel' => str_contains($channel, 'linkedin') ? 'linkedin' : 'email', 'unread' => $unread, 'at' => (string) ($c['lastActivityAt'] ?? $c['lastRepliedAt'] ?? ''),
-                'label' => $ourLabel, 'labelsKnown' => $ids !== null, 'snippet' => $snippet];
+                'label' => $ourLabel, 'labelsKnown' => $ids !== null, 'snippet' => $this->snippetOf($cid, $c)];
         }
         usort($out, fn ($a, $b) => strcmp($b['at'], $a['at']));
         $unread = count(array_filter($out, fn ($c) => $c['unread']));
@@ -623,7 +714,9 @@ final class CallDesk
         $q = ['userId' => $sender['userId'], 'limit' => 50];
         if ($this->writesOn() && $this->sender()) $q['markAsRead'] = 'true';
         $r = $this->clientOrFail()->get('/inbox/' . $contactId, $q);
-        $lead = $this->store->all('SELECT * FROM leads WHERE contact_id = ? ORDER BY added_at DESC LIMIT 1', [$contactId])[0] ?? null;
+        $leadIds = array_values(array_unique(array_filter(array_map(fn ($m) => is_array($m) && is_string($m['leadId'] ?? null) ? $m['leadId'] : '', $r['data'] ?? []))));
+        $leads = $this->leadsFor($contactId, ['leadIds' => $leadIds]);
+        $lead = $leads[0] ?? null;
         $msgs = [];
         foreach ($r['data'] ?? [] as $m) {
             $type = (string) ($m['type'] ?? '');
@@ -633,11 +726,13 @@ final class CallDesk
                 'subject' => isset($m['subject']) ? (string) $m['subject'] : null, 'text' => self::plain((string) ($m['message'] ?? $m['body'] ?? ''))];
         }
         usort($msgs, fn ($a, $b) => strcmp($a['at'], $b['at']));
+        $lastMsg = end($msgs);
+        if ($lastMsg && $lastMsg['text'] !== '') $this->store->setSnippet($contactId, ($lastMsg['out'] ? 'You: ' : '') . self::snippet($lastMsg['text']), $lastMsg['at'], ($this->now)());
         $names = array_column($this->store->all('SELECT id, name FROM campaigns'), 'name', 'id');
         return ['contactId' => $contactId, 'leadId' => $lead['lead_id'] ?? null,
             'name' => $lead ? trim($lead['first_name'] . ' ' . $lead['last_name']) : '', 'jobTitle' => $lead['title'] ?? '', 'company' => $lead['company'] ?? '',
-            'campaign' => $lead ? ($names[$lead['campaign_id']] ?? '') : '',
-            'signal' => $lead && $lead['signal_job_title'] ? ($lead['signal_track'] ?: 'IT') . ' · ' . $lead['signal_job_title'] : null,
+            'campaign' => $lead ? ($names[$lead['campaign_id']] ?? '') : '', 'more' => max(0, count(array_unique(array_column($leads, 'campaign_id'))) - 1),
+            'signal' => self::signalOf($lead),
             'messages' => $msgs, 'canLinkedin' => $lead !== null, 'markedRead' => isset($q['markAsRead'])];
     }
 
@@ -654,7 +749,7 @@ final class CallDesk
         if (!empty($in['attachments'])) throw new ValidationError('Attachments are not supported.');
         if (($in['confirm'] ?? null) !== true) throw new ValidationError('Confirm before sending.');
         $s = $this->senderOrFail();
-        $lead = $this->store->all('SELECT * FROM leads WHERE contact_id = ? ORDER BY added_at DESC LIMIT 1', [$contactId])[0] ?? null;
+        $lead = $this->leadsFor($contactId)[0] ?? null;
         if ($channel === 'linkedin') {
             if (!$lead) throw new ValidationError('LinkedIn replies work for campaign leads only. Reply by email instead.');
             $req = ['POST', '/inbox/linkedin', ['sendUserId' => $s['userId'], 'leadId' => (string) $lead['lead_id'], 'contactId' => $contactId, 'message' => $text]];
@@ -715,7 +810,7 @@ final class CallDesk
             throw new ValidationError('lemlist did not return this conversation\'s labels, so removing a label is not safe here. Remove it in lemlist.');
         }
         $req = ['POST', '/inbox/conversations/labels/' . $contactId, $body];
-        $lead = $this->store->all('SELECT lead_id FROM leads WHERE contact_id = ? ORDER BY added_at DESC LIMIT 1', [$contactId])[0]['lead_id'] ?? null;
+        $lead = $this->leadsFor($contactId, $conv ? self::convHints($conv) : [])[0]['lead_id'] ?? null;
         $ids = ['contactId' => $contactId, 'leadId' => $lead, 'label' => $label ?? 'none'];
         if (!$this->writesOn()) return $this->preview('label', [$req], $ids);
         $this->limiter->hit($this->user, 'label');

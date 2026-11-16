@@ -333,3 +333,34 @@ test('lemlist health: reachable, plan + calls API, webhook registered / disabled
     ok(!str_contains(json_encode(Health::lemlistChecks($cfg, $c, $store, $now)), T_LEM_SECRET), 'the secret is never shown');
     eq('WARN', Health::lemlistChecks(['LEMLIST_BACKEND' => '', 'LEMLIST_API_KEY' => ''] + $cfg)[0][1], 'off without a key');
 });
+
+test('lemlist webhook diagnostics: every refusal says why (no values), /health turns it into a FAIL with the fix; the signed self-test stores nothing', function () {
+    $cfg = t_lem_config();
+    [, $store] = t_lem();
+    $t = 1_794_500_000;
+    $send = fn (string $raw) => LemlistWebhook::handle($cfg, 'POST', $raw, $store, fn () => $t)[0];
+    eq(401, $send(json_encode(['type' => 'emailsReplied', '_id' => 'act_r1'])));
+    eq(401, $send(json_encode(['type' => 'emailsReplied', '_id' => 'act_r2', 'secret' => 'an-old-secret-from-the-lemlist-ui'])));
+    eq(401, $send('<html>not json</html>'));
+    eq(401, $send(''));
+    $r = $store->meta('hook_rejected');
+    eq(4, $r['count']);
+    eq(['no secret field' => 1, 'secret mismatch' => 1, 'not JSON' => 1, 'empty body' => 1], $r['reasons']);
+    $log = json_encode($GLOBALS['__events']);
+    ok(!str_contains($log, 'an-old-secret-from-the-lemlist-ui') && !str_contains($log, T_LEM_SECRET), 'no secret values in the audit log');
+    ok(str_contains($log, '"reason":"secret mismatch"') && str_contains($log, '"eventType":"emailsReplied"'));
+    $rows = array_column(Health::lemlistChecks($cfg, null, $store, $t + 60), null, 0);
+    eq('FAIL', $rows['lemlist webhook deliveries refused'][1]);
+    ok(str_contains($rows['lemlist webhook deliveries refused'][2], '4 in 24 h'));
+    ok(str_contains($rows['lemlist webhook deliveries refused'][2], '--delete=<id>, then --register'), 'tells how to fix a secret mismatch');
+    $rows = array_column(Health::lemlistChecks($cfg, null, $store, $t + 2 * 86400), null, 0);
+    ok(!isset($rows['lemlist webhook deliveries refused']), 'gone after 24 h without refusals');
+    // bin/lemlist-webhook.php --test: signed, accepted, nothing stored as an event
+    eq([200, ['ok' => true, 'test' => true]], LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'test_1', 'type' => LemlistWebhook::TEST_TYPE, 'secret' => T_LEM_SECRET]), $store, fn () => $t));
+    eq(0, (int) $store->one('SELECT COUNT(*) FROM events'));
+    eq($t, $store->meta('hook_test_at'));
+    // real events now carry the contact's custom fields (long scripts): still accepted
+    $big = ['_id' => 'act_big1', 'type' => 'emailsSent', 'secret' => T_LEM_SECRET, 'leadId' => 'lea_it01', 'message' => str_repeat('<p>Long HTML email body</p>', 20000), 'Touch 1 Call' => str_repeat('script ', 5000)];
+    ok(strlen(json_encode($big)) > 512_000);
+    eq(200, LemlistWebhook::handle($cfg, 'POST', json_encode($big), $store, fn () => $t)[0], 'up to 2 MB');
+});

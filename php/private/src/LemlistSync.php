@@ -302,6 +302,7 @@ final class LemlistSync
                 'phone' => mb_substr((string) ($l['phone'] ?? ''), 0, 60), 'last_state' => (string) ($l['lastState'] ?? ''), 'status' => (string) ($l['status'] ?? ''),
                 'paused' => (int) $paused, 'added_at' => (string) ($l['createdAt'] ?? $l['addedAt'] ?? ''), 'updated_at' => ($this->now)(),
                 'fields' => LeadVars::pick($l, array_keys($vars))];
+            if ($row['contact_id'] === '') unset($row['contact_id']); // lemlist's export has no contactId: keep the one learned from tasks/activities/the inbox
             $this->store->upsertLead($row);
         }
     }
@@ -487,7 +488,26 @@ final class LemlistLinker
 /** POST /hooks/lemlist: secret checked in constant time, event stored (ids and types only), answered fast. */
 final class LemlistWebhook
 {
-    public const MAX_BODY = 512_000;
+    public const MAX_BODY = 2_000_000; // events now carry the contact's custom fields (call scripts etc.)
+    public const TEST_TYPE = 'signalDeskTest';
+
+    /** A refused delivery: audit (reason, size, event type; never values) and a counter for /health. */
+    private static function rejected(?LemlistStore $store, int $t, string $reason, int $bytes, ?string $type): void
+    {
+        Audit::event('lemlist_hook_rejected', ['reason' => $reason, 'bytes' => $bytes, 'eventType' => $type !== null ? mb_substr($type, 0, 60) : null]);
+        if (!$store) return;
+        try {
+            $r = $store->meta('hook_rejected', []) ?: [];
+            $since = (int) ($r['since'] ?? 0);
+            if ($since < $t - 86400) $r = ['since' => $t, 'count' => 0, 'reasons' => []];
+            $r['count'] = (int) $r['count'] + 1;
+            $r['reasons'][$reason] = (int) ($r['reasons'][$reason] ?? 0) + 1;
+            $r['last'] = ['at' => $t, 'reason' => $reason, 'eventType' => $type];
+            $store->setMeta('hook_rejected', $r);
+        } catch (\Throwable) {
+            // the 401 matters more than the counter
+        }
+    }
 
     /** @return array{0:int,1:array} [HTTP status, JSON body] */
     public static function handle(array $config, string $method, string $raw, ?LemlistStore $store, ?callable $now = null): array
@@ -497,14 +517,24 @@ final class LemlistWebhook
         if (strtoupper($method) !== 'POST') return [405, ['error' => 'POST only']];
         $secret = (string) ($config['LEMLIST_WEBHOOK_SECRET'] ?? '');
         if ($secret === '') return [503, ['error' => 'Webhook secret not configured']];
-        if (strlen($raw) > self::MAX_BODY) return [413, ['error' => 'Too large']];
+        if (strlen($raw) > self::MAX_BODY) {
+            self::rejected($store, $now(), 'too large', strlen($raw), null);
+            return [413, ['error' => 'Too large']];
+        }
         $d = json_decode($raw, true);
         $given = is_array($d) && is_string($d['secret'] ?? null) ? $d['secret'] : '';
         if (!hash_equals($secret, $given)) {
-            Audit::event('lemlist_hook_rejected', ['reason' => is_array($d) ? 'bad secret' : 'not JSON']);
+            // why, without any value: no JSON / no secret field / a different secret (e.g. registered with an old secret or in the lemlist UI)
+            $reason = !is_array($d) ? ($raw === '' ? 'empty body' : 'not JSON') : (!array_key_exists('secret', $d) ? 'no secret field' : 'secret mismatch');
+            self::rejected($store, $now(), $reason, strlen($raw), is_array($d) ? (string) ($d['type'] ?? '') : null);
             return [401, ['error' => 'Unauthorized']];
         }
         if (!$store) return [503, ['error' => 'Storage unavailable']];
+        if (($d['type'] ?? '') === self::TEST_TYPE) { // bin/lemlist-webhook.php --test: proves the path end to end, stores nothing
+            $store->setMeta('hook_test_at', $now());
+            Audit::event('lemlist_hook', ['type' => self::TEST_TYPE, 'duplicate' => false]);
+            return [200, ['ok' => true, 'test' => true]];
+        }
         $type = mb_substr((string) ($d['type'] ?? ''), 0, 60);
         $id = (string) ($d['_id'] ?? '');
         if ($id === '') $id = 'hook_' . substr(hash('sha256', $raw), 0, 32);
@@ -513,6 +543,15 @@ final class LemlistWebhook
             'lead_id' => isset($d['leadId']) ? (string) $d['leadId'] : null, 'campaign_id' => isset($d['campaignId']) ? (string) $d['campaignId'] : null,
             'contact_id' => isset($d['contactId']) ? (string) $d['contactId'] : null]);
         if ($new && str_starts_with($id, 'act_')) $store->addActivity(LemlistSync::activityRow($d + ['_id' => $id], 'hook'));
+        if ($new && preg_match('/Replied$/', $type) && is_string($d['contactId'] ?? null)) {
+            // the inbox snippet: the reply's first 90 characters, plain text (never logged)
+            foreach (['text', 'message', 'body', 'emailText'] as $k) {
+                if (is_string($d[$k] ?? null) && trim($d[$k]) !== '') {
+                    $store->setSnippet((string) $d['contactId'], CallDesk::snippet($d[$k]), (string) ($d['createdAt'] ?? gmdate('Y-m-d\TH:i:s.000\Z', $t)), $t);
+                    break;
+                }
+            }
+        }
         if ($new && in_array($type, ['sendLimitReached', 'connectionIssue', 'customDomainErrors', 'lemwarmPaused', 'deliverabilityAlertTriggered'], true)) {
             $alerts = $store->meta('alerts', []) ?: [];
             $alerts[] = ['type' => $type, 'at' => $t];

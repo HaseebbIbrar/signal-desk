@@ -257,6 +257,10 @@ SQL);
         // call scripts: the lead's custom fields used by the campaign's steps (JSON), and the step a task belongs to
         $cols = array_column($this->db->query('PRAGMA table_info(leads)')->fetchAll(), 'name');
         if (!in_array('fields', $cols, true)) $this->db->exec('ALTER TABLE leads ADD COLUMN fields TEXT');
+        // inbox: conversations are matched to leads by contactId (then email, LinkedIn); the last message line per contact (90 chars, never logged)
+        $this->db->exec('CREATE INDEX IF NOT EXISTS leads_contact ON leads (contact_id)');
+        $this->db->exec('CREATE INDEX IF NOT EXISTS leads_email ON leads (email COLLATE NOCASE)');
+        $this->db->exec('CREATE TABLE IF NOT EXISTS snippets (contact_id TEXT PRIMARY KEY, text TEXT, at TEXT, updated_at INTEGER)');
         $cols = array_column($this->db->query('PRAGMA table_info(tasks)')->fetchAll(), 'name');
         if (!in_array('step_id', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN step_id TEXT');
         if (!in_array('seq_step', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN seq_step INTEGER');
@@ -296,6 +300,14 @@ SQL);
     public function upsertLead(array $row): void
     {
         $this->upsert('leads', $row, 'lead_id');
+    }
+
+    /** The last message line of an inbox contact (newer wins). Plain text, max 90 characters; lives only here, never in logs. */
+    public function setSnippet(string $contactId, string $text, string $at, int $now): void
+    {
+        if ($contactId === '' || $text === '') return;
+        $this->db->prepare('INSERT INTO snippets (contact_id, text, at, updated_at) VALUES (?,?,?,?) ON CONFLICT(contact_id) DO UPDATE SET text = excluded.text, at = excluded.at, updated_at = excluded.updated_at WHERE excluded.at >= snippets.at')
+            ->execute([$contactId, mb_substr($text, 0, 90), $at, $now]);
     }
 
     /** @return bool true when new (dedupe by lemlist _id) */
@@ -353,7 +365,7 @@ SQL);
     {
         $cut = gmdate('Y-m-d\TH:i:s\Z', $now - self::KEEP_DAYS * 86400);
         $out = [];
-        foreach (['activities' => "created_at < ?", 'events' => 'received_at < ?', 'leads' => 'updated_at < ?', 'calls' => 'created_at < ?', 'outcomes' => 'at < ?', 'business' => 'at < ?'] as $t => $where) {
+        foreach (['activities' => "created_at < ?", 'events' => 'received_at < ?', 'leads' => 'updated_at < ?', 'calls' => 'created_at < ?', 'outcomes' => 'at < ?', 'business' => 'at < ?', 'snippets' => 'updated_at < ?'] as $t => $where) {
             $arg = in_array($t, ['activities', 'business'], true) ? $cut : $now - self::KEEP_DAYS * 86400;
             $st = $this->db->prepare("DELETE FROM $t WHERE $where");
             $st->execute([$arg]);

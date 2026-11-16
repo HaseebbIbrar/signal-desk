@@ -177,9 +177,41 @@ final class MockLemlist
             $msg('emailsReplied', '2026-11-05T10:00:00.000Z', '<p>Saw your post, do you also do contract roles?</p>')]);
     }
 
+    private function leadById(string $id): ?array
+    {
+        foreach ($this->leads as $rows) foreach ($rows as $l) if ($l['_id'] === $id) return $l;
+        return null;
+    }
+
+    /**
+     * Inbox cases seen live: a lead in two running campaigns with no task or activity carrying its contactId (found by email),
+     * and a LinkedIn conversation with no email (found by LinkedIn URL). Local demo and tests only.
+     */
+    public function addDemoContacts(): void
+    {
+        $this->campaigns[] = ['_id' => 'cam_it000002', 'name' => 'Thursday MPC 2', 'status' => 'running', 'sequenceId' => 'seq_it_main', 'createdAt' => '2026-11-01T08:00:00Z'];
+        $this->sequences['cam_it000002'] = $this->sequences['cam_it000001'];
+        $sam = ['firstName' => 'Sam', 'lastName' => 'Scope', 'jobTitle' => 'Manager Data & Analytics', 'linkedinUrl' => 'https://www.linkedin.com/in/sam-scope-0042',
+            'email' => 'sam.scope@scopecooling.example', 'phone' => '+32 470 00 42 42', 'lastState' => 'emailsReplied', 'status' => 'paused'];
+        $this->leads['cam_it000001'][] = ['_id' => 'lea_it08', 'campaignId' => 'cam_it000001', 'contactId' => 'ctc_scope0001', 'companyName' => 'Scope Cooling Europe', 'createdAt' => '2026-10-05T18:00:00.000Z'] + $sam;
+        $this->leads['cam_it000002'] = [['_id' => 'lea_it28', 'campaignId' => 'cam_it000002', 'contactId' => 'ctc_scope0001', 'companyName' => 'Scope Cooling', 'createdAt' => '2026-11-02T05:00:00.000Z'] + $sam];
+        $sent = ['_id' => 'act_mscope001', 'type' => 'emailsSent', 'createdAt' => '2026-11-16T09:18:56.000Z', 'subject' => 'Re: A permanent Data Architect for Scope Cooling',
+            'message' => '<p>Hi Sam,</p><p>Thanks for coming back to me. I will send his CV this afternoon.</p>', 'sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins'];
+        $this->inbox['ctc_scope0001'] = ['_id' => 'ibx_scope0001', 'contactId' => 'ctc_scope0001', 'leadId' => '', 'email' => $sam['email'], 'linkedinUrl' => $sam['linkedinUrl'],
+            'channels' => ['email', 'linkedin'], 'lastActivityAt' => $sent['createdAt'], 'lastRepliedChannel' => 'email', 'users' => [['userId' => self::USER, 'sender' => true, 'read' => false]],
+            'contact' => ['_id' => 'ctc_scope0001', 'fullName' => 'Sam Scope'], 'labels' => [], 'thread' => [
+                ['_id' => 'act_mscope000', 'type' => 'emailsReplied', 'createdAt' => '2026-11-13T10:56:58.000Z', 'subject' => 'Re: A permanent Data Architect for Scope Cooling',
+                    'message' => '<p>Hi Jonathan,</p><p>Interesting profile. Is he open to a hybrid role in Oostkamp? Happy to see his CV.</p>'], $sent]];
+        $this->inbox['ctc_kimli0001'] = ['_id' => 'ibx_kimli0001', 'contactId' => 'ctc_kimli0001', 'leadId' => '', 'email' => null, 'linkedinUrl' => 'https://www.linkedin.com/in/example-hr-director/',
+            'channels' => ['linkedin'], 'lastActivityAt' => '2026-11-15T16:40:00.000Z', 'lastRepliedChannel' => 'linkedin', 'users' => [['userId' => self::USER, 'sender' => true, 'read' => true]],
+            'contact' => ['_id' => 'ctc_kimli0001', 'fullName' => 'Kim Example'], 'labels' => [], 'thread' => [
+                ['_id' => 'act_mkimli001', 'type' => 'linkedinReplied', 'createdAt' => '2026-11-15T16:40:00.000Z', 'message' => 'Thanks Jonathan. We are hiring two IT profiles in Q1, can we talk on Tuesday?']]];
+    }
+
     /** Local mock mode only: keep tasks, calls, inbox and labels across requests in a JSON file (tests stay in memory). */
     public function persist(string $file): void
     {
+        $this->addDemoContacts();
         $this->stateFile = $file;
         $d = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
         if (is_array($d)) foreach (['tasks', 'callLog', 'inbox', 'labels', 'sent'] as $k) if (isset($d[$k]) && is_array($d[$k])) $this->$k = $d[$k];
@@ -243,9 +275,16 @@ final class MockLemlist
         if ($method === 'GET' && $path === '/inbox') {
             if (($q['userId'] ?? '') === '') return $ok(['error' => 'User ID is required'], 400);
             $data = [];
+            $first = fn (array $m) => strtok(trim(html_entity_decode(strip_tags((string) preg_replace('~<br\s*/?>|</p>~i', "\n", (string) $m['message'])))), "\n") ?: '';
             foreach ($this->inbox as $c) {
-                $row = array_diff_key($c, ['thread' => 1]) + ['messages' => [array_map(fn ($m) => $m, end($c['thread']))]];
-                $row['messages'] = [['_id' => end($c['thread'])['_id'], 'body' => end($c['thread'])['message'], 'sentAt' => end($c['thread'])['createdAt']]];
+                $lead = $this->leadById((string) ($c['leadId'] ?? ''));
+                $rep = array_values(array_filter($c['thread'], fn ($m) => str_ends_with($m['type'], 'Replied')));
+                $snt = array_values(array_filter($c['thread'], fn ($m) => !str_ends_with($m['type'], 'Replied')));
+                $row = ['_id' => $c['_id'], 'contactId' => $c['contactId'], 'contactName' => $c['contact']['fullName'] ?? '',
+                    'contactEmail' => $c['email'] ?? ($lead['email'] ?? null), 'contactLinkedinUrl' => $c['linkedinUrl'] ?? ($lead['linkedinUrl'] ?? null),
+                    'lastActivityAt' => $c['lastActivityAt'], 'lastRepliedChannel' => $c['lastRepliedChannel'], 'channels' => $c['channels'], 'users' => $c['users'], 'labels' => $c['labels']];
+                if ($rep) $row += ['lastRepliedAt' => end($rep)['createdAt'], 'lastRepliedMessagePreview' => $first(end($rep))];
+                if ($snt) $row += ['lastSentAt' => end($snt)['createdAt'], 'lastSentMessagePreview' => $first(end($snt))];
                 if (!$this->returnLabels) unset($row['labels']);
                 $data[] = $row;
             }
@@ -309,7 +348,9 @@ final class MockLemlist
             return $ok(['campaigns' => array_slice($f, (int) ($q['offset'] ?? 0), (int) ($q['limit'] ?? 100)), 'pagination' => ['totalRecords' => count($f)]]);
         }
         if ($method === 'GET' && preg_match('~^/campaigns/([^/]+)/sequences$~', $path, $m)) return isset($this->sequences[$m[1]]) ? $ok($this->sequences[$m[1]]) : $ok(['error' => 'Campaign not found'], 404);
-        if ($method === 'GET' && preg_match('~^/v2/campaigns/([^/]+)/export/leads$~', $path, $m)) return $ok($this->leads[$m[1]] ?? []);
+        if ($method === 'GET' && preg_match('~^/v2/campaigns/([^/]+)/export/leads$~', $path, $m)) {
+            return $ok(array_map(fn ($l) => array_diff_key($l, ['contactId' => 1]), $this->leads[$m[1]] ?? [])); // like live: no contactId in the export
+        }
         if ($method === 'GET' && preg_match('~^/v2/campaigns/([^/]+)/stats$~', $path, $m)) {
             $it = $m[1] === 'cam_it000001';
             return $ok(['nbLeads' => $it ? 7 : 3, 'nbLeadsLaunched' => $it ? 6 : 3, 'nbLeadsReached' => $it ? 6 : 3, 'messagesSent' => $it ? 8 : 5, 'delivered' => $it ? 5 : 2,

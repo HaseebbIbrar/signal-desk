@@ -1381,7 +1381,7 @@
         left.appendChild(h("button", { type: "button", class: "sd-k-conv" + (c.contactId === ib.sel ? " sd-k-conv-on" : ""), "aria-current": c.contactId === ib.sel ? "true" : null, onclick: function () { openThread(c.contactId); } },
           h("span", { class: "sd-o-between" }, h("span", { class: "sd-k-convname" + (c.unread ? " sd-k-unread" : "") }, h("span", { class: "sd-dot " + (c.unread ? "sd-c-accent" : "sd-k-nodot"), "aria-hidden": "true" }), c.name + (c.unread ? "" : "")),
             h("span", { class: "sd-muted sd-o-small", text: when(c.at) })),
-          h("span", { class: "sd-muted sd-o-small", text: [c.company, c.campaign].filter(Boolean).join(" · ") || "Not in a campaign" }),
+          h("span", { class: "sd-muted sd-o-small", text: c.inCampaign ? [c.company, c.campaign + (c.more ? " +" + c.more + " more" : ""), c.signal].filter(Boolean).join(" · ") : "Not in a campaign" }),
           h("span", { class: "sd-k-snippet", text: c.snippet }),
           h("span", { class: "sd-k-chips6" }, h("span", { class: "sd-k-chip " + (c.channel === "linkedin" ? "sd-c-message" : "sd-c-email"), text: c.channel === "linkedin" ? "LinkedIn" : "Email" }),
             c.label ? h("span", { class: "sd-k-lbl " + (LBL[c.label] || "sd-c-muted"), text: c.label }) : null)));
@@ -1394,7 +1394,7 @@
         var conv = (ib.list || []).filter(function (c) { return c.contactId === t.contactId; })[0] || {};
         right.appendChild(h("div", { class: "sd-k-thead" },
           h("div", { class: "sd-o-stack-xxs" }, h("span", { class: "sd-k-tname", text: t.name || conv.name || "Contact" }),
-            h("span", { class: "sd-muted sd-o-small13", text: [t.jobTitle, t.company, t.signal].filter(Boolean).join(" · ") || "Not a campaign lead" })),
+            h("span", { class: "sd-muted sd-o-small13", text: t.leadId ? [t.jobTitle, t.company, t.campaign + (t.more ? " +" + t.more + " more" : ""), t.signal].filter(Boolean).join(" · ") : "Not a campaign lead" })),
           h("div", { class: "sd-k-chips", role: "group", "aria-label": "Label" }, ["Interested", "Meeting", "Not interested", "Out of office"].map(function (l) {
             var b = btn(l, conv.label === l, function () { setLabel(conv, conv.label === l ? null : l); }, "sd-btn-sm");
             if (d.viewOnly) b.disabled = true;

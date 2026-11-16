@@ -402,6 +402,15 @@ php bin/lemlist-webhook.php --status
 ```
 It registers **https://signals.swooscale.com/hooks/lemlist** for all events, with your secret. lemlist sends the secret back in every event; Signal Desk refuses any event without it. If lemlist ever disables the webhook (health shows FAIL), run `--status`, then `--delete=<id>` and `--register` again.
 
+**If events don't arrive** (health: "nothing in 24 h" or "deliveries refused"):
+```
+php bin/lemlist-webhook.php --status
+php bin/lemlist-webhook.php --test
+```
+- `--status` lists lemlist's webhooks (disabled? last error code) and what Signal Desk saw: the last accepted event and refused deliveries with the reason (`secret mismatch`, `no secret field`, `not JSON`, `empty body`, `too large`). No values are ever shown or logged.
+- `--test` sends a delivery signed with this `config.php`'s secret from the server to `https://…/hooks/lemlist` through 20i. **OK** means the route and the secret work; if lemlist's own deliveries are still refused with `secret mismatch` / `no secret field`, its webhook was created with another secret (or in the lemlist UI without one). A webhook's secret can't be changed: `--delete=<id>` it and `--register` again.
+- An answer that is not the app's JSON points at 20i (firewall) instead.
+
 **What it reads and keeps:**
 - Lead names, companies, titles, LinkedIn, **emails and phones** are stored only in `storage/lemlist.sqlite` (outside the web root), never in logs. Webhook events are kept as ids and types only.
 - The app can only *read* from lemlist, except for the writes the Calls tab will use: log a call, complete / reschedule / skip a task, reply by email or LinkedIn, set an inbox label, create our 4 labels (Interested, Meeting, Not interested, Out of office), and the webhook setup above. Anything else (deleting leads, changing campaigns, bulk sends) is refused in code before any request.

@@ -62,6 +62,14 @@ final class Health
         }
         if ($store) {
             $last = (int) $store->meta('last_event_at', 0);
+            $rej = $store->meta('hook_rejected', []) ?: [];
+            if (!empty($rej['count']) && (int) ($rej['last']['at'] ?? 0) > $now - 86400) {
+                $why = implode(', ', array_map(fn ($k, $v) => "$k: $v", array_keys($rej['reasons']), $rej['reasons']));
+                $fix = isset($rej['reasons']['secret mismatch']) || isset($rej['reasons']['no secret field'])
+                    ? ': the webhook in lemlist was made with another secret (or none). Run bin/lemlist-webhook.php --status, --delete=<id>, then --register'
+                    : '';
+                $rows[] = ['lemlist webhook deliveries refused', 'FAIL', $rej['count'] . ' in 24 h (' . $why . '), last ' . gmdate('Y-m-d H:i', (int) $rej['last']['at']) . ' UTC' . $fix];
+            }
             $rows[] = ['lemlist last webhook event', $last && $now - $last <= 86400 ? 'OK' : 'WARN', $last ? gmdate('Y-m-d H:i', $last) . ' UTC' . ($now - $last > 86400 ? ': nothing in 24 h' : '') : 'none received yet'];
             $sync = (int) $store->meta('last_sync_at', 0);
             $rows[] = ['lemlist last sync', $sync && $now - $sync <= 3600 ? 'OK' : 'WARN', $sync ? gmdate('Y-m-d H:i', $sync) . ' UTC' . ($now - $sync > 3600 ? ': older than 1 h, check the cron job (bin/lemlist-sync.php)' : '') : 'never: run bin/lemlist-sync.php (cron)'];
