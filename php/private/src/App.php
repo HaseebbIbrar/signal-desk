@@ -431,8 +431,7 @@ final class App
     {
         try {
             $raw = (string) file_get_contents('php://input', false, null, 0, LemlistWebhook::MAX_BODY + 1);
-            $store = Lemlist::mode($this->config) === 'off' ? null : Lemlist::store($this->config);
-            [$status, $body] = LemlistWebhook::handle($this->config, $method, $raw, $store);
+            [$status, $body] = LemlistWebhook::handle($this->config, $method, $raw, null); // no SQLite here: buffered for the cron
         } catch (\Throwable $e) {
             Audit::event('lemlist_hook_error', ['where' => basename($e->getFile()) . ':' . $e->getLine()]);
             [$status, $body] = [500, ['error' => 'Server error']];
@@ -532,7 +531,7 @@ final class Views
             try {
                 $store = Lemlist::store($config);
                 $due = CallDesk::dueCount($store); // open call + manual tasks
-                $eventAt = $store->meta('last_event_at');
+                $eventAt = $store->live('last_event_at');
             } catch (\Throwable) {
                 // no lemlist database yet: no badge, no live status
             }

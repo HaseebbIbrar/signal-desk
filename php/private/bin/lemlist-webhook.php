@@ -74,9 +74,9 @@ try {
         if (!$mine) fwrite(STDOUT, "No webhook points to $target: run --register.\n");
         // what Signal Desk itself saw (counts and reasons only)
         $store = Lemlist::store($config);
-        $last = (int) $store->meta('last_event_at', 0);
+        $last = (int) $store->live('last_event_at', 0);
         fwrite(STDOUT, 'Last accepted event: ' . ($last ? gmdate('Y-m-d H:i', $last) . ' UTC' : 'none yet') . "\n");
-        $rej = $store->meta('hook_rejected', []) ?: [];
+        $rej = $store->live('hook_rejected', []) ?: [];
         if (!empty($rej['count'])) {
             fwrite(STDOUT, 'Refused deliveries since ' . gmdate('Y-m-d H:i', (int) $rej['since']) . ' UTC: ' . $rej['count'] . ' ('
                 . implode(', ', array_map(fn ($k, $v) => "$k: $v", array_keys($rej['reasons']), $rej['reasons'])) . ")\n");

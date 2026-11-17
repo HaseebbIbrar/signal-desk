@@ -207,20 +207,183 @@ final class LemlistClient
     }
 }
 
-/** storage/lemlist.sqlite. Lead emails and phones live ONLY in the leads table; events keep ids and types only. */
+/**
+ * storage/lemlist.sqlite (everything re-syncable from lemlist) with storage/lemlist-app.sqlite attached as "app"
+ * (app-only data: call log, outcomes). Lead emails and phones live ONLY in the leads table; events keep ids and types only.
+ * Rollback journal (never WAL), every write under storage/lemlist.lock in short transactions: see LemlistDb.php.
+ */
 final class LemlistStore
 {
     public const KEEP_DAYS = 365;
-    public \PDO $db;
+    public const BATCH = 200;
+    private const SCHEMA = 3;
+    public ?\PDO $db;
+    public readonly string $file;
+    public readonly string $dir;
+    public readonly string $appFile;
+    /** How long a writer waits for storage/lemlist.lock. */
+    public int $lockWaitMs = 20000;
+    /** Committed write() transactions (tests). */
+    public int $transactions = 0;
+    /** @var resource|null */
+    private $lockFh = null;
+    private int $depth = 0;
+    private bool $inTx = false;
 
-    public function __construct(string $file)
+    public function __construct(string $file, ?string $appFile = null)
     {
         if (!extension_loaded('pdo_sqlite')) throw new AppError(500, 'NO_SQLITE', 'PHP extension pdo_sqlite is missing (needed for storage/lemlist.sqlite)');
+        $this->file = $file;
+        $this->dir = dirname($file);
+        $this->appFile = $appFile ?? $this->dir . '/lemlist-app.sqlite';
+        foreach ([$file, $this->appFile] as $f) self::leaveWal($f, fn (callable $fn) => $this->locked($fn));
         $new = !is_file($file);
-        $this->db = new \PDO('sqlite:' . $file, null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION, \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC]);
-        if ($new) @chmod($file, 0600);
-        $this->db->exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=OFF;');
-        $this->migrate();
+        $newApp = !is_file($this->appFile);
+        $this->db = new LemlistPdo('sqlite:' . $file, $this);
+        $this->db->exec('PRAGMA busy_timeout=15000');
+        $this->db->prepare('ATTACH DATABASE ? AS app')->execute([$this->appFile]);
+        foreach ([[$new, $file], [$newApp, $this->appFile]] as [$n, $f]) if ($n) @chmod($f, 0600);
+        foreach (['main', 'app'] as $schema) {
+            if (strtolower((string) $this->db->query("PRAGMA $schema.journal_mode")->fetchColumn()) !== 'delete') {
+                $this->locked(fn () => $this->db->query("PRAGMA $schema.journal_mode=DELETE")->fetchAll());
+            }
+            $this->db->exec("PRAGMA $schema.synchronous=NORMAL");
+        }
+        $this->db->exec('PRAGMA foreign_keys=OFF');
+        if ((int) $this->one('PRAGMA main.user_version') !== self::SCHEMA || (int) $this->one('PRAGMA app.user_version') !== self::SCHEMA) $this->write(fn () => $this->migrate());
+    }
+
+    /** A WAL database (header bytes 18/19 = 2) or leftover -wal/-shm files: checkpoint and switch to DELETE once, without the -shm file. */
+    public static function walLeftover(string $file): bool
+    {
+        if (is_file("$file-wal") || is_file("$file-shm")) return true;
+        $h = is_file($file) ? @file_get_contents($file, false, null, 18, 2) : false;
+        return is_string($h) && strlen($h) === 2 && (ord($h[0]) === 2 || ord($h[1]) === 2);
+    }
+
+    private static function leaveWal(string $file, callable $locked): void
+    {
+        if (!is_file($file) || !self::walLeftover($file)) return;
+        $locked(function () use ($file) {
+            if (!self::walLeftover($file)) return;
+            // EXCLUSIVE locking mode before the first access: SQLite never uses the -shm shared memory (what fails on network file systems)
+            $pdo = new \PDO('sqlite:' . $file, null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
+            $pdo->exec('PRAGMA busy_timeout=15000');
+            $pdo->exec('PRAGMA locking_mode=EXCLUSIVE');
+            $pdo->query('PRAGMA wal_checkpoint(TRUNCATE)')->fetchAll();
+            $pdo->query('PRAGMA journal_mode=DELETE')->fetchAll();
+            $pdo = null;
+            if (!is_file("$file-wal")) @unlink("$file-shm");
+            Audit::event('lemlist_db', ['event' => 'wal_to_delete', 'file' => basename($file)]);
+        });
+    }
+
+    /** Run $fn holding storage/lemlist.lock (re-entrant). Every writing statement goes through here (LemlistPdo). */
+    public function locked(callable $fn): mixed
+    {
+        if ($this->depth > 0) return $fn();
+        $this->acquire();
+        $this->depth++;
+        try {
+            return $fn();
+        } finally {
+            $this->depth--;
+            $this->release();
+        }
+    }
+
+    /** One short transaction under the lock (nested calls join the outer one). */
+    public function write(callable $fn): mixed
+    {
+        if ($this->inTx) return $fn();
+        return $this->locked(function () use ($fn) {
+            $this->db->exec('BEGIN IMMEDIATE');
+            $this->inTx = true;
+            try {
+                $r = $fn();
+                $this->db->exec('COMMIT');
+                $this->transactions++;
+                return $r;
+            } catch (\Throwable $e) {
+                try {
+                    $this->db->exec('ROLLBACK');
+                } catch (\Throwable) {
+                }
+                throw $e;
+            } finally {
+                $this->inTx = false;
+            }
+        });
+    }
+
+    /** $fn for every item, in transactions of BATCH items. @return int items */
+    public function batch(iterable $items, callable $fn, int $size = self::BATCH): int
+    {
+        $n = 0;
+        $buf = [];
+        $flush = function () use (&$buf, &$n, $fn) {
+            if (!$buf) return;
+            $this->write(function () use ($buf, $fn) {
+                foreach ($buf as $item) $fn($item);
+            });
+            $n += count($buf);
+            $buf = [];
+        };
+        foreach ($items as $item) {
+            $buf[] = $item;
+            if (count($buf) >= $size) $flush();
+        }
+        $flush();
+        return $n;
+    }
+
+    private function acquire(): void
+    {
+        if (!$this->lockFh) {
+            $this->lockFh = @fopen($this->dir . '/lemlist.lock', 'c');
+            if (!$this->lockFh) throw new AppError(500, 'DB_LOCK', 'Cannot open storage/lemlist.lock');
+        }
+        $until = microtime(true) + $this->lockWaitMs / 1000;
+        while (!flock($this->lockFh, LOCK_EX | LOCK_NB)) {
+            if (microtime(true) >= $until) throw new AppError(503, 'DB_BUSY', 'The lemlist database is busy (the sync is writing). Try again in a moment.');
+            usleep(50_000);
+        }
+    }
+
+    private function release(): void
+    {
+        if ($this->lockFh) flock($this->lockFh, LOCK_UN);
+    }
+
+    /** End of a run: close the connection and the lock file (no handle stays open on the network file system). */
+    public function close(): void
+    {
+        $this->db = null;
+        if ($this->lockFh) {
+            @flock($this->lockFh, LOCK_UN);
+            @fclose($this->lockFh);
+            $this->lockFh = null;
+        }
+        gc_collect_cycles(); // statements keep a reference to the store: free the connection now
+    }
+
+    /** PRAGMA integrity_check of main or app: [] when ok, else the first problems (page/index names, no data). */
+    public function integrity(string $schema = 'main'): array
+    {
+        $rows = array_map(fn ($r) => (string) reset($r), $this->db->query("PRAGMA $schema.integrity_check(20)")->fetchAll());
+        return $rows === ['ok'] ? [] : $rows;
+    }
+
+    /** Live webhook state (storage/lemlist-hook-state.json) first, then what the cron imported. */
+    public function live(string $key, mixed $default = null): mixed
+    {
+        return HookBuffer::state($this->dir)[$key] ?? $this->meta($key, $default);
+    }
+
+    /** Task ids closed in lemlist (webhook) that the cron has not imported yet. */
+    public function closedByHook(): array
+    {
+        return array_keys(HookBuffer::state($this->dir)['closed_tasks'] ?? []);
     }
 
     private function migrate(): void
@@ -246,8 +409,6 @@ CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, type TEXT, channel TEXT, 
   title TEXT, message TEXT, due_date TEXT, manual INTEGER, lead_name TEXT, lead_company TEXT, seen_at INTEGER);
 CREATE TABLE IF NOT EXISTS call_statuses (key TEXT PRIMARY KEY, label TEXT, answered INTEGER, positive INTEGER, negative INTEGER, pauses INTEGER, position INTEGER);
 CREATE TABLE IF NOT EXISTS stats (campaign_id TEXT, period TEXT, data TEXT, fetched_at INTEGER, PRIMARY KEY (campaign_id, period));
-CREATE TABLE IF NOT EXISTS calls (external_id TEXT PRIMARY KEY, lemlist_id TEXT, task_id TEXT, lead_id TEXT, user_id TEXT, by_user TEXT, call_status TEXT, started_at TEXT, created_at INTEGER);
-CREATE TABLE IF NOT EXISTS outcomes (lead_id TEXT PRIMARY KEY, outcome TEXT, by_user TEXT, at INTEGER);
 CREATE TABLE IF NOT EXISTS business (kind TEXT, id TEXT, company TEXT, company_key TEXT, at TEXT, PRIMARY KEY (kind, id));
 CREATE INDEX IF NOT EXISTS business_company ON business (company_key);
 SQL);
@@ -264,11 +425,19 @@ SQL);
         $cols = array_column($this->db->query('PRAGMA table_info(tasks)')->fetchAll(), 'name');
         if (!in_array('step_id', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN step_id TEXT');
         if (!in_array('seq_step', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN seq_step INTEGER');
-        // added in Phase 3: resumable call logs (call logged, then the task updated)
-        $cols = array_column($this->db->query('PRAGMA table_info(calls)')->fetchAll(), 'name');
-        foreach (['answered INTEGER', 'task_done INTEGER', 'callback_at TEXT', 'kind TEXT'] as $col) {
-            if (!in_array(explode(' ', $col)[0], $cols, true)) $this->db->exec("ALTER TABLE calls ADD COLUMN $col");
+        // app-only data (not re-syncable from lemlist) lives in lemlist-app.sqlite: the call log (idempotency) and outcomes
+        $this->db->exec('CREATE TABLE IF NOT EXISTS app.calls (external_id TEXT PRIMARY KEY, lemlist_id TEXT, task_id TEXT, lead_id TEXT, user_id TEXT, by_user TEXT, call_status TEXT,
+            started_at TEXT, created_at INTEGER, answered INTEGER, task_done INTEGER, callback_at TEXT, kind TEXT)');
+        $this->db->exec('CREATE TABLE IF NOT EXISTS app.outcomes (lead_id TEXT PRIMARY KEY, outcome TEXT, by_user TEXT, at INTEGER)');
+        foreach (['calls', 'outcomes'] as $t) { // moved from lemlist.sqlite (before 2026-11-17)
+            if (!$this->one("SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = ?", [$t])) continue;
+            $have = array_column($this->db->query("PRAGMA main.table_info($t)")->fetchAll(), 'name');
+            $cols = implode(',', array_intersect($have, array_column($this->db->query("PRAGMA app.table_info($t)")->fetchAll(), 'name')));
+            $this->db->exec("INSERT OR IGNORE INTO app.$t ($cols) SELECT $cols FROM main.$t");
+            $this->db->exec("DROP TABLE main.$t");
         }
+        $this->db->exec('PRAGMA main.user_version = ' . self::SCHEMA);
+        $this->db->exec('PRAGMA app.user_version = ' . self::SCHEMA);
     }
 
     public function meta(string $key, mixed $default = null): mixed

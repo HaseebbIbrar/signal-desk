@@ -27,12 +27,22 @@ final class Health
         $rows[] = ['lemlist writes (Calls tab)', 'OK', ($config['LEMLIST_WRITES'] ?? 'off') === 'on' ? 'on: calls, tasks, replies and labels are sent to lemlist'
             : 'off: preview mode, nothing is sent (set LEMLIST_WRITES to on after testing)'];
         $rows[] = ['LEMLIST_WEBHOOK_SECRET', ($config['LEMLIST_WEBHOOK_SECRET'] ?? '') !== '' ? 'OK' : 'WARN', ($config['LEMLIST_WEBHOOK_SECRET'] ?? '') !== '' ? 'set' : 'missing: the webhook will refuse all events'];
+        $dir = (string) ($config['STORAGE_DIR'] ?? '');
         try {
             $store ??= Lemlist::store($config);
-            $rows[] = ['lemlist storage (SQLite)', 'OK', 'storage/lemlist.sqlite'];
+            $dir = $store->dir;
+            $rows[] = ['lemlist storage (SQLite)', 'OK', 'storage/lemlist.sqlite, journal ' . $store->one('PRAGMA main.journal_mode')];
         } catch (\Throwable $e) {
-            $rows[] = ['lemlist storage (SQLite)', 'FAIL', $e->getMessage()];
+            $rows[] = ['lemlist storage (SQLite)', 'FAIL', LemlistDbStatus::reason($e) . '. Run bin/lemlist-sync.php --check-db'];
             $store = null;
+        }
+        if ($dir !== '') {
+            if ($row = LemlistDbStatus::healthRow($dir, $now)) $rows[] = $row;
+            $p = HookBuffer::pending($dir);
+            if ($p['count']) {
+                $late = $p['oldest'] && $p['oldest'] < $now - 3600;
+                $rows[] = ['lemlist webhook events waiting', $late ? 'WARN' : 'OK', $p['count'] . ' buffered for the cron' . ($late ? ', the oldest since ' . gmdate('Y-m-d H:i', $p['oldest']) . ' UTC: is bin/lemlist-sync.php running?' : '')];
+            }
         }
         $team = [];
         try {
@@ -61,8 +71,8 @@ final class Health
             $rows[] = ['lemlist API reachable', 'FAIL', $e->getMessage()];
         }
         if ($store) {
-            $last = (int) $store->meta('last_event_at', 0);
-            $rej = $store->meta('hook_rejected', []) ?: [];
+            $last = (int) $store->live('last_event_at', 0);
+            $rej = $store->live('hook_rejected', []) ?: [];
             if (!empty($rej['count']) && (int) ($rej['last']['at'] ?? 0) > $now - 86400) {
                 $why = implode(', ', array_map(fn ($k, $v) => "$k: $v", array_keys($rej['reasons']), $rej['reasons']));
                 $fix = isset($rej['reasons']['secret mismatch']) || isset($rej['reasons']['no secret field'])

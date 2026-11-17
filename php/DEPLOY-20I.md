@@ -411,6 +411,19 @@ php bin/lemlist-webhook.php --test
 - `--test` sends a delivery signed with this `config.php`'s secret from the server to `https://…/hooks/lemlist` through 20i. **OK** means the route and the secret work; if lemlist's own deliveries are still refused with `secret mismatch` / `no secret field`, its webhook was created with another secret (or in the lemlist UI without one). A webhook's secret can't be changed: `--delete=<id>` it and `--register` again.
 - An answer that is not the app's JSON points at 20i (firewall) instead.
 
+**Storage on 20i (since 17 Nov 2026).** 20i's storage is a network file system. SQLite's WAL mode needs a shared-memory file (`lemlist.sqlite-shm`) that fails there with `disk I/O error`, so:
+- the database uses the classic rollback journal (`journal_mode=DELETE`, `synchronous=NORMAL`, 15 s busy timeout). A database left in WAL mode (or with `-wal`/`-shm` files) is checkpointed and switched over once, the first time it is opened, without touching the `-shm` file;
+- every write runs under `storage/lemlist.lock` in short transactions (200 rows), so the cron and the web pages never write at the same time. The cron closes the database at the end of each run;
+- the webhook no longer opens the database: events go to `storage/lemlist-hooks.jsonl` (ids, types and a masked one-line reply, no emails or phones) and the cron imports them. The pages still react at once (inbox refresh, tasks done in the dialer disappear) through `storage/lemlist-hook-state.json`;
+- app-only data (the call log and lead outcomes) is in its own small file `storage/lemlist-app.sqlite`, backed up daily to `lemlist-app.sqlite.bak-<date>` (7 kept). Everything in `lemlist.sqlite` can be synced again from lemlist;
+- an I/O error is retried once after 2 s; if it fails again the reason, free disk space, file sizes and leftover journal files go to `storage/lemlist-db-status.json` and `/health.php` shows **lemlist storage: ERROR …**;
+- a damaged database (daily `integrity_check`, or "malformed"/"not a database") is renamed to `lemlist.sqlite.broken-<date>` after backing up the app data, and the next cron run rebuilds it from lemlist (a full sync).
+
+Check the database at any time (prints journal mode, sizes, free space, integrity, buffered webhook events; no data):
+```
+php bin/lemlist-sync.php --check-db
+```
+
 **What it reads and keeps:**
 - Lead names, companies, titles, LinkedIn, **emails and phones** are stored only in `storage/lemlist.sqlite` (outside the web root), never in logs. Webhook events are kept as ids and types only.
 - The app can only *read* from lemlist, except for the writes the Calls tab will use: log a call, complete / reschedule / skip a task, reply by email or LinkedIn, set an inbox label, create our 4 labels (Interested, Meeting, Not interested, Out of office), and the webhook setup above. Anything else (deleting leads, changing campaigns, bulk sends) is refused in code before any request.
@@ -495,6 +508,9 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 
 | What you see | Fix |
 |---|---|
+| Cron mail `lemlist-sync: … disk I/O error` / health "lemlist storage: ERROR" | Upload this version (no WAL any more) and run `php bin/lemlist-sync.php --check-db`. If it still fails: check free space in the line it prints; if `-wal`/`-shm` files remain and the error persists, rename `storage/lemlist.sqlite` (and its `-wal`/`-shm`) to `lemlist.sqlite.old`: the next cron run rebuilds it from lemlist. Outcomes and the call log are in `lemlist-app.sqlite` (from the first successful open of this version). |
+| Health "lemlist storage: WARN … damaged … renamed" | Nothing to do: the next cron run rebuilds from lemlist. Delete the `lemlist.sqlite.broken-*` file after a week if all is fine. |
+| Health "lemlist webhook events waiting … is bin/lemlist-sync.php running?" | Events are buffered but the cron hasn't imported them for over an hour: check the cron job and its mails. |
 | "the private folder … was not found" | `private/` isn't where the app looks. Layout A: name it `signal-desk-private` and put it next to `public_html`. Layout B: `_private` inside the document root. |
 | "Signal Desk: setup needed" | The message says what's wrong in `config.php` (missing value, mock in production, dev id equals master…). |
 | Login loops back to the login page | The site was opened over `http://`. Use `https://` (step 5). |

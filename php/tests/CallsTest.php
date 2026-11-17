@@ -10,6 +10,7 @@ use SignalDesk\Auth;
 use SignalDesk\CallDesk;
 use SignalDesk\CallDeskLimiter;
 use SignalDesk\Config;
+use SignalDesk\HookBuffer;
 use SignalDesk\LemlistStore;
 use SignalDesk\LemlistSync;
 use SignalDesk\LemlistWebhook;
@@ -285,6 +286,7 @@ test('inbox snippet: latest message, HTML stripped, cut at 90; cached when a thr
     $cfg = t_lem_config();
     LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'act_hk_scope', 'type' => 'emailsReplied', 'secret' => T_LEM_SECRET, 'contactId' => 'ctc_scope0001', 'leadId' => 'lea_it08',
         'createdAt' => '2026-11-16T12:00:00.000Z', 'text' => "Great,\nthanks! Tuesday 10:00 works for me."]), $store, fn () => T_CALL_NOW);
+    HookBuffer::import($store);
     $mock->inbox['ctc_scope0001']['lastActivityAt'] = '2026-11-16T12:00:00.000Z';
     eq('Great, thanks! Tuesday 10:00 works for me.', $c()['ctc_scope0001']['snippet']);
     $log = json_encode($GLOBALS['__events']);
@@ -436,8 +438,11 @@ test('calls: webhook updates: a reply refreshes the inbox, a task event closes t
     LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'act_hk_reply', 'type' => 'linkedinReplied', 'secret' => T_LEM_SECRET, 'contactId' => 'ctc_hr02', 'leadId' => 'lea_hr02']), $store, fn () => T_CALL_NOW + 5);
     eq(T_CALL_NOW + 5, $d->updates()['inboxAt']);
     LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'act_hk_task', 'type' => 'aircallDone', 'secret' => T_LEM_SECRET, 'taskId' => 'opp_call0002', 'leadId' => 'lea_hr01']), $store, fn () => T_CALL_NOW + 9);
-    eq('closed', $store->one("SELECT status FROM tasks WHERE id = 'opp_call0002'"), 'done in the dialer: gone from the queue');
+    ok(!str_contains(json_encode($d->view()), 'opp_call0002'), 'done in the dialer: gone from the queue at once');
+    eq('due', $store->one("SELECT status FROM tasks WHERE id = 'opp_call0002'"), 'the webhook itself does not write SQLite');
     $u = $d->updates();
+    HookBuffer::import($store);
+    eq('closed', $store->one("SELECT status FROM tasks WHERE id = 'opp_call0002'"), 'closed in SQLite by the cron import');
     eq(T_CALL_NOW + 9, $u['tasksAt']);
     eq(T_CALL_NOW + 9, $u['eventAt']);
     eq($n, count($mock->calls), 'polling updates makes no lemlist request');

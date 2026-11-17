@@ -182,12 +182,14 @@ final class LemlistSync
                 } elseif ($phase === 'campaigns') {
                     $list = $this->client->get('/campaigns', ['version' => 'v2', 'status' => 'running', 'limit' => 100, 'offset' => $st['offset']]);
                     $items = is_array($list['campaigns'] ?? null) ? $list['campaigns'] : (array_is_list($list) ? $list : []);
-                    foreach ($items as $c) {
-                        if (($c['status'] ?? 'running') !== 'running') continue; // running campaigns only
-                        $this->store->upsertCampaign(['id' => (string) $c['_id'], 'name' => (string) ($c['name'] ?? ''), 'status' => 'running', 'running' => 1,
-                            'sequence_id' => (string) ($c['sequenceId'] ?? ''), 'created_at' => (string) ($c['createdAt'] ?? ''), 'total_steps' => null, 'updated_at' => ($this->now)()]);
-                        $st['campaigns'][] = (string) $c['_id'];
-                    }
+                    $this->store->write(function () use ($items, &$st) {
+                        foreach ($items as $c) {
+                            if (($c['status'] ?? 'running') !== 'running') continue; // running campaigns only
+                            $this->store->upsertCampaign(['id' => (string) $c['_id'], 'name' => (string) ($c['name'] ?? ''), 'status' => 'running', 'running' => 1,
+                                'sequence_id' => (string) ($c['sequenceId'] ?? ''), 'created_at' => (string) ($c['createdAt'] ?? ''), 'total_steps' => null, 'updated_at' => ($this->now)()]);
+                            $st['campaigns'][] = (string) $c['_id'];
+                        }
+                    });
                     if (count($items) >= 100) { $st['offset'] += 100; } else {
                         // campaigns no longer running: hidden from Outreach, history kept (12-month pruning); a restart brings them back
                         $ids = $st['campaigns'];
@@ -213,11 +215,13 @@ final class LemlistSync
                     $since = (int) $this->store->meta('activities_since', ($this->now)() - 30 * 86400);
                     $page = $this->client->get('/activities', ['version' => 'v2', 'minDate' => self::iso(max(0, $since - self::OVERLAP)), 'offset' => $st['offset'], 'limit' => 100]);
                     $items = array_is_list($page) ? $page : ($page['activities'] ?? $page['data'] ?? []);
-                    foreach ($items as $a) {
-                        $this->store->addActivity(self::activityRow($a, 'sync'));
-                        $t = strtotime((string) ($a['createdAt'] ?? '')) ?: 0;
-                        if ($t > (int) ($st['maxAct'] ?? 0)) $st['maxAct'] = $t;
-                    }
+                    $this->store->write(function () use ($items, &$st) { // one transaction per page of 100
+                        foreach ($items as $a) {
+                            $this->store->addActivity(self::activityRow($a, 'sync'));
+                            $t = strtotime((string) ($a['createdAt'] ?? '')) ?: 0;
+                            if ($t > (int) ($st['maxAct'] ?? 0)) $st['maxAct'] = $t;
+                        }
+                    });
                     if (count($items) >= 100) { $st['offset'] += 100; } else {
                         if ($st['maxAct']) $this->store->setMeta('activities_since', $st['maxAct']);
                         $st['phase'] = 'tasks';
@@ -226,7 +230,7 @@ final class LemlistSync
                     }
                 } elseif ($phase === 'tasks') {
                     $r = $this->client->get('/v2/tasks', ['status' => 'pending', 'include' => 'contact', 'limit' => 100, 'page' => $st['page'], 'sortBy' => 'dueDate', 'sortOrder' => 'asc']);
-                    foreach ($r['results'] ?? [] as $t) $this->storeTask($t, (int) $st['taskSeen']);
+                    $this->store->batch($r['results'] ?? [], fn ($t) => $this->storeTask($t, (int) $st['taskSeen']));
                     if (count($r['results'] ?? []) >= 100 && $st['page'] < 100) { $st['page']++; } else {
                         $this->store->closeUnseenTasks((int) $st['taskSeen']);
                         $st['phase'] = 'finish';
@@ -270,6 +274,7 @@ final class LemlistSync
         $mainId = (string) ($camp['sequence_id'] ?? '');
         if ($mainId === '' || !isset($seqs[$mainId])) $mainId = (string) array_key_first($seqs);
         $count = 0;
+        $this->store->write(function () use ($seqs, $mainId, $cid, &$count) {
         foreach ($seqs as $sid => $seq) {
             foreach ($seq['steps'] ?? [] as $s) {
                 $isMain = (string) $sid === $mainId;
@@ -281,6 +286,7 @@ final class LemlistSync
                     'delay' => (int) ($s['delay'] ?? 0), 'title' => mb_substr((string) ($s['subject'] ?? $s['title'] ?? ''), 0, 300), 'message' => mb_substr((string) ($s['message'] ?? ''), 0, 20000)]);
             }
         }
+        });
         $this->store->db->prepare('UPDATE campaigns SET total_steps = ? WHERE id = ?')->execute([$count, $cid]);
     }
 
@@ -292,7 +298,7 @@ final class LemlistSync
         foreach ($this->store->all('SELECT title, message FROM steps WHERE campaign_id = ?', [$cid]) as $s) {
             foreach (LeadVars::names((string) $s['title'] . ' ' . (string) $s['message']) as $n) $vars[$n] = true;
         }
-        foreach (array_is_list($rows) ? $rows : [] as $l) {
+        $this->store->batch(array_is_list($rows) ? $rows : [], function (array $l) use ($cid, $vars) {
             $li = (string) ($l['linkedinUrl'] ?? '');
             $paused = in_array(strtolower((string) ($l['lastState'] ?? '')), ['paused'], true) || strtolower((string) ($l['status'] ?? '')) === 'paused';
             $row = ['lead_id' => (string) $l['_id'], 'campaign_id' => $cid, 'contact_id' => (string) ($l['contactId'] ?? ''),
@@ -304,7 +310,7 @@ final class LemlistSync
                 'fields' => LeadVars::pick($l, array_keys($vars))];
             if ($row['contact_id'] === '') unset($row['contact_id']); // lemlist's export has no contactId: keep the one learned from tasks/activities/the inbox
             $this->store->upsertLead($row);
-        }
+        });
     }
 
     private function syncStats(string $cid): void
@@ -438,11 +444,11 @@ final class LemlistLinker
         $out = ['linked' => 0, 'it' => 0, 'hr' => 0];
         $atlasCache = [];
         $upd = $store->db->prepare('UPDATE leads SET signal_track=?, signal_row=?, signal_company=?, signal_job_title=?, signal_role_group=?, signal_sub_group=?, signal_job_url=?, signal_approved_at=?, signal_date_found=?, atlas_pool=?, atlas_matching=? WHERE lead_id=?');
-        foreach ($store->all('SELECT lead_id, linkedin_key FROM leads') as $l) {
+        $store->batch($store->all('SELECT lead_id, linkedin_key FROM leads'), function (array $l) use ($signals, $upd, $atlas, &$atlasCache, &$out) {
             $s = $l['linkedin_key'] ? ($signals[$l['linkedin_key']] ?? null) : null;
             if (!$s) {
                 $upd->execute([null, null, null, null, null, null, null, null, null, null, null, $l['lead_id']]);
-                continue;
+                return;
             }
             $ak = $s['signal_job_title'] . '|' . $s['signal_sub_group'] . '|' . $s['signal_role_group'];
             if ($atlas && !array_key_exists($ak, $atlasCache)) {
@@ -457,7 +463,7 @@ final class LemlistLinker
                 $s['signal_approved_at'], $s['signal_date_found'], $a['m'] ?? null, $a['n'] ?? null, $l['lead_id']]);
             $out['linked']++;
             $out[strtolower($s['signal_track'])]++;
-        }
+        });
         $store->setMeta('last_link_at', time());
         $store->setMeta('approved_dms', count($signals));
         // approved decision makers not (yet) in any lemlist campaign: "Needs action" (no LinkedIn URLs stored, just the job)
@@ -492,33 +498,40 @@ final class LemlistWebhook
     public const TEST_TYPE = 'signalDeskTest';
 
     /** A refused delivery: audit (reason, size, event type; never values) and a counter for /health. */
-    private static function rejected(?LemlistStore $store, int $t, string $reason, int $bytes, ?string $type): void
+    private static function rejected(string $dir, int $t, string $reason, int $bytes, ?string $type): void
     {
         Audit::event('lemlist_hook_rejected', ['reason' => $reason, 'bytes' => $bytes, 'eventType' => $type !== null ? mb_substr($type, 0, 60) : null]);
-        if (!$store) return;
+        if ($dir === '') return;
         try {
-            $r = $store->meta('hook_rejected', []) ?: [];
-            $since = (int) ($r['since'] ?? 0);
-            if ($since < $t - 86400) $r = ['since' => $t, 'count' => 0, 'reasons' => []];
-            $r['count'] = (int) $r['count'] + 1;
-            $r['reasons'][$reason] = (int) ($r['reasons'][$reason] ?? 0) + 1;
-            $r['last'] = ['at' => $t, 'reason' => $reason, 'eventType' => $type];
-            $store->setMeta('hook_rejected', $r);
+            HookBuffer::updateState($dir, function (array $s) use ($t, $reason, $type) {
+                $r = $s['hook_rejected'] ?? [];
+                if ((int) ($r['since'] ?? 0) < $t - 86400) $r = ['since' => $t, 'count' => 0, 'reasons' => []];
+                $r['count'] = (int) $r['count'] + 1;
+                $r['reasons'][$reason] = (int) ($r['reasons'][$reason] ?? 0) + 1;
+                $r['last'] = ['at' => $t, 'reason' => $reason, 'eventType' => $type];
+                $s['hook_rejected'] = $r;
+                return $s;
+            });
         } catch (\Throwable) {
             // the 401 matters more than the counter
         }
     }
 
-    /** @return array{0:int,1:array} [HTTP status, JSON body] */
+    /**
+     * Never opens SQLite (the cron may be writing): the event is appended to storage/lemlist-hooks.jsonl and imported by the cron.
+     * $store only tells where storage is (tests); the app passes null and STORAGE_DIR is used.
+     * @return array{0:int,1:array} [HTTP status, JSON body]
+     */
     public static function handle(array $config, string $method, string $raw, ?LemlistStore $store, ?callable $now = null): array
     {
         $now ??= fn () => time();
+        $dir = $store?->dir ?? (string) ($config['STORAGE_DIR'] ?? '');
         if (Lemlist::mode($config) === 'off') return [404, ['error' => 'Not found']];
         if (strtoupper($method) !== 'POST') return [405, ['error' => 'POST only']];
         $secret = (string) ($config['LEMLIST_WEBHOOK_SECRET'] ?? '');
         if ($secret === '') return [503, ['error' => 'Webhook secret not configured']];
         if (strlen($raw) > self::MAX_BODY) {
-            self::rejected($store, $now(), 'too large', strlen($raw), null);
+            self::rejected($dir, $now(), 'too large', strlen($raw), null);
             return [413, ['error' => 'Too large']];
         }
         $d = json_decode($raw, true);
@@ -526,12 +539,13 @@ final class LemlistWebhook
         if (!hash_equals($secret, $given)) {
             // why, without any value: no JSON / no secret field / a different secret (e.g. registered with an old secret or in the lemlist UI)
             $reason = !is_array($d) ? ($raw === '' ? 'empty body' : 'not JSON') : (!array_key_exists('secret', $d) ? 'no secret field' : 'secret mismatch');
-            self::rejected($store, $now(), $reason, strlen($raw), is_array($d) ? (string) ($d['type'] ?? '') : null);
+            self::rejected($dir, $now(), $reason, strlen($raw), is_array($d) ? (string) ($d['type'] ?? '') : null);
             return [401, ['error' => 'Unauthorized']];
         }
-        if (!$store) return [503, ['error' => 'Storage unavailable']];
+        if ($dir === '' || !is_dir($dir)) return [503, ['error' => 'Storage unavailable']];
         if (($d['type'] ?? '') === self::TEST_TYPE) { // bin/lemlist-webhook.php --test: proves the path end to end, stores nothing
-            $store->setMeta('hook_test_at', $now());
+            $t0 = $now();
+            HookBuffer::updateState($dir, function (array $s) use ($t0) { $s['hook_test_at'] = $t0; return $s; });
             Audit::event('lemlist_hook', ['type' => self::TEST_TYPE, 'duplicate' => false]);
             return [200, ['ok' => true, 'test' => true]];
         }
@@ -539,34 +553,7 @@ final class LemlistWebhook
         $id = (string) ($d['_id'] ?? '');
         if ($id === '') $id = 'hook_' . substr(hash('sha256', $raw), 0, 32);
         $t = $now();
-        $new = $store->addEvent(['id' => mb_substr($id, 0, 80), 'type' => $type, 'created_at' => (string) ($d['createdAt'] ?? gmdate('c', $t)), 'received_at' => $t,
-            'lead_id' => isset($d['leadId']) ? (string) $d['leadId'] : null, 'campaign_id' => isset($d['campaignId']) ? (string) $d['campaignId'] : null,
-            'contact_id' => isset($d['contactId']) ? (string) $d['contactId'] : null]);
-        if ($new && str_starts_with($id, 'act_')) $store->addActivity(LemlistSync::activityRow($d + ['_id' => $id], 'hook'));
-        if ($new && preg_match('/Replied$/', $type) && is_string($d['contactId'] ?? null)) {
-            // the inbox snippet: the reply's first 90 characters, plain text (never logged)
-            foreach (['text', 'message', 'body', 'emailText'] as $k) {
-                if (is_string($d[$k] ?? null) && trim($d[$k]) !== '') {
-                    $store->setSnippet((string) $d['contactId'], CallDesk::snippet($d[$k]), (string) ($d['createdAt'] ?? gmdate('Y-m-d\TH:i:s.000\Z', $t)), $t);
-                    break;
-                }
-            }
-        }
-        if ($new && in_array($type, ['sendLimitReached', 'connectionIssue', 'customDomainErrors', 'lemwarmPaused', 'deliverabilityAlertTriggered'], true)) {
-            $alerts = $store->meta('alerts', []) ?: [];
-            $alerts[] = ['type' => $type, 'at' => $t];
-            $store->setMeta('alerts', array_slice($alerts, -50));
-        }
-        if ($new) {
-            // Calls tab: replies make the inbox reload; task events make the queue reload (and close the task here at once)
-            if (preg_match('/Replied$|^linkedinInterested$|^emailsInterested$|^opportunityReplied$/', $type)) $store->setMeta('inbox_event_at', $t);
-            $taskId = is_string($d['taskId'] ?? null) ? $d['taskId'] : '';
-            if ($taskId !== '' || preg_match('/^(aircall|manual)(Done|Ignored)$|^taskDone$|^skipped$/', $type)) $store->setMeta('tasks_event_at', $t);
-            if (preg_match('/^opp_[A-Za-z0-9]{3,60}$/', $taskId) && preg_match('/Done$|Ignored$|^skipped$|^aircallEnded$/', $type)) {
-                $store->db->prepare("UPDATE tasks SET status = 'closed' WHERE id = ?")->execute([$taskId]);
-            }
-        }
-        $store->setMeta('last_event_at', $t);
+        $new = !HookBuffer::push($dir, HookBuffer::slim($d, mb_substr($id, 0, 80), $type, $t), $t);
         Audit::event('lemlist_hook', ['type' => $type, 'duplicate' => !$new]);
         return [200, ['ok' => true, 'duplicate' => !$new]];
     }

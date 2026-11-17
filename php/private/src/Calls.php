@@ -143,7 +143,7 @@ final class CallDesk
         if (!$force && (int) $this->store->meta('tasks_refreshed_at', 0) > $now - self::REFRESH_EVERY) return false;
         for ($page = 1; $page <= 20; $page++) {
             $r = $this->client->get('/v2/tasks', ['status' => 'pending', 'include' => 'contact', 'limit' => 100, 'page' => $page, 'sortBy' => 'dueDate', 'sortOrder' => 'asc']);
-            foreach ($r['results'] ?? [] as $t) LemlistSync::storeTaskRow($this->store, $t, $now);
+            $this->store->batch($r['results'] ?? [], fn ($t) => LemlistSync::storeTaskRow($this->store, $t, $now));
             if (count($r['results'] ?? []) < 100) break;
         }
         $this->store->closeUnseenTasks($now);
@@ -155,6 +155,8 @@ final class CallDesk
     private function openTasks(): array
     {
         $rows = $this->store->all("SELECT t.*, c.name AS campaign_name FROM tasks t LEFT JOIN campaigns c ON c.id = t.campaign_id WHERE t.status IN ('due','upcoming') ORDER BY t.due_date, t.id");
+        $closed = array_flip($this->store->closedByHook()); // done in lemlist, the cron has not imported the event yet
+        if ($closed) $rows = array_values(array_filter($rows, fn ($r) => !isset($closed[$r['id']])));
         $leadIds = array_values(array_unique(array_filter(array_column($rows, 'lead_id'))));
         $leads = $acts = $steps = [];
         if ($leadIds) {
@@ -295,7 +297,9 @@ final class CallDesk
     /** Open call + manual tasks that are due (the Calls badge in the top bar). */
     public static function dueCount(LemlistStore $store): int
     {
-        return (int) $store->one("SELECT COUNT(*) FROM tasks WHERE status = 'due' AND (type = 'phone' OR type = 'manual' OR manual = 1)");
+        $closed = $store->closedByHook();
+        return (int) $store->one("SELECT COUNT(*) FROM tasks WHERE status = 'due' AND (type = 'phone' OR type = 'manual' OR manual = 1)"
+            . ($closed ? ' AND id NOT IN (' . implode(',', array_fill(0, count($closed), '?')) . ')' : ''), $closed);
     }
 
     // ------------------------------------------------------------------ call statuses
@@ -370,7 +374,7 @@ final class CallDesk
                 'badge' => self::dueCount($this->store)], // unique tasks (a manual call task is in both lists)
             'today' => $this->today(),
             'callers' => array_map(fn ($u) => ['userId' => $u['userId'], 'name' => $u['name']], $users),
-            'eventAt' => $this->store->meta('last_event_at'), 'refreshedAt' => $this->store->meta('tasks_refreshed_at'),
+            'eventAt' => $this->store->live('last_event_at'), 'refreshedAt' => $this->store->meta('tasks_refreshed_at'),
         ];
     }
 
@@ -823,7 +827,7 @@ final class CallDesk
     /** Cheap poll (local database only): when did the webhook last bring news? */
     public function updates(): array
     {
-        return ['eventAt' => $this->store->meta('last_event_at'), 'inboxAt' => $this->store->meta('inbox_event_at'), 'tasksAt' => $this->store->meta('tasks_event_at'),
+        return ['eventAt' => $this->store->live('last_event_at'), 'inboxAt' => $this->store->live('inbox_event_at'), 'tasksAt' => $this->store->live('tasks_event_at'),
             'badge' => self::dueCount($this->store)];
     }
 }

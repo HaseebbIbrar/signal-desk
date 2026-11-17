@@ -12,6 +12,7 @@ use SignalDesk\Health;
 use SignalDesk\LeadLogic;
 use SignalDesk\LemlistClient;
 use SignalDesk\LemlistGuard;
+use SignalDesk\HookBuffer;
 use SignalDesk\LemlistLinker;
 use SignalDesk\LemlistRateLimited;
 use SignalDesk\LemlistSender;
@@ -141,14 +142,21 @@ test('lemlist webhook: POST only, secret compared in constant time, events store
     eq(401, LemlistWebhook::handle($cfg, 'POST', json_encode(array_diff_key($body, ['secret' => 1])), $store)[0], 'missing secret');
     eq(401, LemlistWebhook::handle($cfg, 'POST', 'not json', $store)[0]);
     eq(503, LemlistWebhook::handle(['LEMLIST_WEBHOOK_SECRET' => ''] + $cfg, 'POST', json_encode($body), $store)[0], 'no secret configured: refuse everything');
+    $tx = $store->transactions;
     eq([200, ['ok' => true, 'duplicate' => false]], LemlistWebhook::handle($cfg, 'POST', json_encode($body), $store, fn () => 1_794_500_000));
-    eq(1_794_500_000, $store->meta('last_event_at'));
+    eq(1_794_500_000, $store->live('last_event_at'));
     eq([200, ['ok' => true, 'duplicate' => true]], LemlistWebhook::handle($cfg, 'POST', json_encode($body), $store), 'redelivery is ignored');
+    eq([0, $tx], [(int) $store->one('SELECT COUNT(*) FROM events'), $store->transactions], 'the webhook never writes SQLite: buffered for the cron');
+    $buffer = (string) file_get_contents($store->dir . '/' . HookBuffer::FILE);
+    eq(1, substr_count($buffer, "\n"));
+    eq(1, HookBuffer::import($store), 'the cron imports it');
+    ok(!is_file($store->dir . '/' . HookBuffer::FILE) && !is_file($store->dir . '/' . HookBuffer::WORK), 'buffer removed after the import');
     eq(1, (int) $store->one('SELECT COUNT(*) FROM events'));
+    eq(1_794_500_000, $store->meta('last_event_at'));
     eq(['emailsReplied', 'lea_it02'], array_values($store->all('SELECT type, lead_id FROM activities WHERE id = ?', ['act_hook0001'])[0]), 'campaign events also feed the lead logic at once');
     LemlistWebhook::handle($cfg, 'POST', json_encode(['type' => 'sendLimitReached', 'secret' => T_LEM_SECRET]), $store);
-    eq('sendLimitReached', $store->meta('alerts')[0]['type'], 'lemlist alerts are kept for "Needs action"');
-    $dump = json_encode($store->all('SELECT * FROM events')) . json_encode($store->all('SELECT * FROM activities')) . json_encode($store->all('SELECT * FROM meta'));
+    eq('sendLimitReached', $store->live('alerts')[0]['type'], 'lemlist alerts are kept for "Needs action"');
+    $dump = $buffer . json_encode(HookBuffer::state($store->dir)) . json_encode($store->all('SELECT * FROM events')) . json_encode($store->all('SELECT * FROM activities')) . json_encode($store->all('SELECT * FROM meta'));
     foreach (['mail.example', '+32 470', 'Robin', 'secret subject', T_LEM_SECRET] as $pii) ok(!str_contains($dump, $pii), "stored: $pii");
     ok(!str_contains(json_encode($GLOBALS['__events']), 'mail.example') && !str_contains(json_encode($GLOBALS['__events']), T_LEM_SECRET), 'audit log');
     eq(404, LemlistWebhook::handle(['LEMLIST_BACKEND' => 'off', 'LEMLIST_API_KEY' => ''] + $cfg, 'POST', json_encode($body), $store)[0]);
@@ -343,7 +351,7 @@ test('lemlist webhook diagnostics: every refusal says why (no values), /health t
     eq(401, $send(json_encode(['type' => 'emailsReplied', '_id' => 'act_r2', 'secret' => 'an-old-secret-from-the-lemlist-ui'])));
     eq(401, $send('<html>not json</html>'));
     eq(401, $send(''));
-    $r = $store->meta('hook_rejected');
+    $r = $store->live('hook_rejected');
     eq(4, $r['count']);
     eq(['no secret field' => 1, 'secret mismatch' => 1, 'not JSON' => 1, 'empty body' => 1], $r['reasons']);
     $log = json_encode($GLOBALS['__events']);
@@ -358,7 +366,7 @@ test('lemlist webhook diagnostics: every refusal says why (no values), /health t
     // bin/lemlist-webhook.php --test: signed, accepted, nothing stored as an event
     eq([200, ['ok' => true, 'test' => true]], LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'test_1', 'type' => LemlistWebhook::TEST_TYPE, 'secret' => T_LEM_SECRET]), $store, fn () => $t));
     eq(0, (int) $store->one('SELECT COUNT(*) FROM events'));
-    eq($t, $store->meta('hook_test_at'));
+    eq($t, $store->live('hook_test_at'));
     // real events now carry the contact's custom fields (long scripts): still accepted
     $big = ['_id' => 'act_big1', 'type' => 'emailsSent', 'secret' => T_LEM_SECRET, 'leadId' => 'lea_it01', 'message' => str_repeat('<p>Long HTML email body</p>', 20000), 'Touch 1 Call' => str_repeat('script ', 5000)];
     ok(strlen(json_encode($big)) > 512_000);

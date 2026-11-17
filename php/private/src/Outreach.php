@@ -454,7 +454,7 @@ final class Outreach
             'period' => $r, 'tiles' => self::change($cur['tiles'], $prev['tiles']), 'channels' => $cur['channels'], 'business' => $cur['business'],
             'attribution' => (string) ($this->config['LEMLIST_ATTRIBUTION'] ?? 'first_positive'),
             'needs' => $this->needsAction($ids, $r['start']), 'funnel' => $this->funnel($ids, $r['start'], $r['end'], $cur), 'campaigns' => $campaignRows,
-            'syncedAt' => $this->store->meta('last_sync_at'), 'eventAt' => $this->store->meta('last_event_at'),
+            'syncedAt' => $this->store->meta('last_sync_at'), 'eventAt' => $this->store->live('last_event_at'),
         ];
     }
 
@@ -497,7 +497,7 @@ final class Outreach
             foreach ($v['acts'] as $a) if ($a['type'] === 'meetingBooked' && $a['t'] >= $since && ($v['outcome']['outcome'] ?? '') !== 'Meeting') $items['meetings'][$id] = self::brief($v, $a);
             foreach ($v['acts'] as $a) if (in_array($a['type'], ['emailsBounced', 'emailsFailed'], true) && $a['t'] >= $since) $items['bounces'][$id] = self::brief($v, $a);
         }
-        $alerts = array_values(array_filter($this->store->meta('alerts', []) ?: [], fn ($x) => (int) $x['at'] >= $since));
+        $alerts = array_values(array_filter($this->store->live('alerts', []) ?: [], fn ($x) => (int) $x['at'] >= $since));
         $unpushed = $this->store->meta('unpushed_dms', ['count' => 0, 'items' => []]) ?: ['count' => 0, 'items' => []];
         return ['replies' => array_values($items['replies']), 'meetings' => array_values($items['meetings']), 'callbacks' => [], 'bounces' => array_values($items['bounces']),
             'alerts' => $alerts, 'unpushed' => $unpushed];
