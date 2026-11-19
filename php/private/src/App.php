@@ -164,14 +164,14 @@ final class App
                 }
                 $r = $auth->login((string) ($_POST['email'] ?? ''), (string) ($_POST['password'] ?? ''), self::clientIp());
                 if ($r['ok']) {
-                    $this->redirect('/signals');
+                    $this->redirect('/');
                     return;
                 }
                 $this->html(Views::login($r['error'], $this->config), 401);
                 return;
             }
             if ($user) {
-                $this->redirect('/signals');
+                $this->redirect('/');
                 return;
             }
             $this->html(Views::login(null, $this->config));
@@ -189,20 +189,26 @@ final class App
             return;
         }
 
+        // old URLs (saved links, Atlas badge links, ?c=…&p=…) and bare top-tab paths
+        if ($method === 'GET' && ($r = Nav::redirect($path, is_array($_GET) ? $_GET : [], $this->config['STORAGE_DIR'], $user['email'] ?? null, $this->config))) {
+            header('Location: ' . $r[0], true, $r[1]);
+            return;
+        }
         if (!$user) {
             $this->redirect('/login');
             return;
         }
-        match ($path) {
-            '/', '/signals' => $path === '/' ? $this->redirect('/signals') : $this->html(Views::shell('signals', $user, $this->config)),
-            '/verified' => $this->html(Views::shell('verified', $user, $this->config)),
-            '/hr' => $this->html(Views::shell('hr', $user, $this->config)),
-            '/outreach' => $this->html(Views::shell('outreach', $user, $this->config)),
-            '/calls' => $this->html(Views::shell('calls', $user, $this->config)),
-            '/candidates' => $this->html(Views::shell('candidates', $user, $this->config)),
-            '/lists' => $this->html(Views::shell('lists', $user, $this->config)),
-            default => $this->html(Views::notFound(), 404),
-        };
+        $page = Nav::pageFor($path);
+        if ($page === null) {
+            $this->html(Views::notFound(), 404);
+            return;
+        }
+        try {
+            Nav::remember($page, $this->config['STORAGE_DIR'], $user['email']);
+        } catch (\Throwable) {
+            // the sub-tab memory is a convenience
+        }
+        $this->html(Views::shell($page, $user, $this->config));
     }
 
     private function api(string $method, string $route, ?array $user): void
@@ -231,6 +237,7 @@ final class App
                     'calls/inbox' => $this->calls($user['email'])->inbox(self::str($_GET['filter'] ?? 'all', 20)),
                     'calls/thread' => $this->calls($user['email'])->thread(self::str($_GET['contactId'] ?? '', 64)),
                     'calls/updates' => $this->calls($user['email'])->updates(),
+                    'inbox/unread' => $this->calls($user['email'])->unread(),
                     'atlas/search' => $this->requireAtlas()->search(
                         self::str($_GET['title'] ?? ''), self::str($_GET['sub'] ?? ''), self::str($_GET['group'] ?? ''),
                         max(1, min(10000, (int) ($_GET['page'] ?? 1))), ($_GET['all'] ?? '') === '1',
@@ -517,42 +524,62 @@ final class Views
     {
         $csrf = Auth::csrfToken();
         $lemlist = Lemlist::mode($config) !== 'off';
-        $wide = in_array($page, ['outreach', 'calls'], true); // the lemlist tabs use the full-width mockup layout
-        // Top bar (one row, as in the outreach mockup): logo, tabs, lemlist live status, user + log out.
-        $tab = fn (string $href, string $label, bool $active, string $kind = 'link', string $extra = '') => '<a href="' . $href . '"' . ($active ? ' aria-current="page"' : '')
-            . ' class="sd-top-tab' . ($kind === 'strong' ? ' sd-top-tab-strong' : '') . ($active ? ' sd-top-tab-on' : '') . '">' . $label . $extra . '</a>';
-        $tabs = $tab('/signals', 'Signals', $page === 'signals') . $tab('/verified', 'Verified', $page === 'verified') . $tab('/hr', 'HR signals', $page === 'hr')
-            . $tab('/candidates', 'Candidates', $page === 'candidates') . (Atlas::mode($config) === 'off' ? '' : $tab('/lists', 'Lists', $page === 'lists'));
-        $live = '';
+        $wide = in_array($page, ['dashboard', 'calls', 'manual', 'inbox'], true); // the lemlist tabs use the full-width mockup layout
+        $dir = (string) ($config['STORAGE_DIR'] ?? '');
+        $email = (string) ($user['email'] ?? '');
+        $current = Nav::PAGES[$page][0] ?? '';
+        // badges: open call + manual tasks (local database), unread conversations (cached count; app.js refreshes it)
+        $due = 0;
+        $unread = null;
+        $eventAt = null;
         if ($lemlist) {
-            $tabs .= $tab('/outreach', 'Outreach', $page === 'outreach', 'strong');
-            $due = 0;
-            $eventAt = null;
             try {
                 $store = Lemlist::store($config);
-                $due = CallDesk::dueCount($store); // open call + manual tasks
+                $due = CallDesk::dueCount($store);
                 $eventAt = $store->live('last_event_at');
+                $unread = CallDesk::cachedUnread($store->dir);
             } catch (\Throwable) {
-                // no lemlist database yet: no badge, no live status
+                // no lemlist database yet: no badges, no live status
             }
-            $tabs .= $tab('/calls', 'Calls', $page === 'calls', 'strong', $due ? ' <span class="sd-top-badge">' . $due . '</span>' : '');
-            $live = '<span id="sd-live" class="sd-live" data-at="' . self::e((string) ($eventAt ?? '')) . '"><span class="sd-dot sd-c-muted" aria-hidden="true"></span><span class="sd-live-text">lemlist</span></span>';
         }
-        return self::head('Signal Desk · SwooScale')
+        $badge = fn (string $id, int $n) => ' <span id="' . $id . '" class="sd-top-badge"' . ($n > 0 ? '' : ' hidden') . '>' . $n . '</span>';
+        // Top bar (one row): logo, the 5 top tabs, lemlist live status, user + log out. The active top tab is underlined.
+        $tabs = '';
+        foreach (Nav::tops($config) as $top) {
+            $on = $top === $current;
+            $extra = $top === 'calls' ? $badge('sd-badge-calls', $due) : ($top === 'inbox' ? $badge('sd-badge-inbox', (int) $unread) : '');
+            $tabs .= '<a href="' . self::e(Nav::href($top, $dir, $email, $config)) . '"' . ($on ? ' aria-current="' . (count(Nav::subs($top, $config)) > 1 ? 'true' : 'page') . '"' : '')
+                . ' class="sd-top-tab sd-top-tab-strong' . ($on ? ' sd-top-tab-on' : '') . '" data-top="' . $top . '">' . self::e(Nav::TOPS[$top][0]) . $extra . '</a>';
+        }
+        // Sub-tabs: pill row under the top bar (wraps on a phone); the active one is filled
+        $subRow = '';
+        $subs = $current !== '' ? Nav::subs($current, $config) : [];
+        if (count($subs) > 1) {
+            $subRow = '<nav class="sd-sub" aria-label="' . self::e(Nav::TOPS[$current][0]) . '"><div class="sd-sub-in">';
+            foreach ($subs as $p) {
+                $on = $p === $page;
+                $subRow .= '<a href="' . Nav::PAGES[$p][1] . '" class="sd-sub-tab' . ($on ? ' sd-sub-tab-on' : '') . '"' . ($on ? ' aria-current="page"' : '') . ' data-sub="' . $p . '">'
+                    . self::e(Nav::PAGES[$p][2]) . ($current === 'calls' ? ' <span class="sd-sub-count" data-count="' . $p . '"></span>' : '') . '</a>';
+            }
+            $subRow .= '</div></nav>';
+        }
+        $live = $lemlist ? '<span id="sd-live" class="sd-live" data-at="' . self::e((string) ($eventAt ?? '')) . '"><span class="sd-dot sd-c-muted" aria-hidden="true"></span><span class="sd-live-text">lemlist</span></span>' : '';
+        $title = (Nav::PAGES[$page][2] ?? 'Signal Desk') . ($current === 'bd' || $current === 'sourcing' ? ' · ' . Nav::TOPS[$current][0] : '') . ' · Signal Desk';
+        return self::head($title)
             . '<body class="antialiased' . ($wide ? ' sd-o-body' : '') . '" data-page="' . self::e($page) . '" data-csrf="' . self::e($csrf) . '" data-atlas="' . (Atlas::mode($config) === 'off' ? 'off' : 'on') . '" data-jd="' . (Atlas::mode($config) !== 'off' ? 'on' : 'off') . '" data-ai="' . (Llms::mode($config) !== 'off' ? 'on' : 'off') . '" data-prospeo="' . (Prospeo::mode($config) !== 'off' ? 'on' : 'off') . '"><div class="min-h-dvh">' . self::banner($config)
             . '<header class="sd-top"><div class="sd-top-in">'
             . '<div class="sd-top-left"><span class="sd-top-dot" aria-hidden="true"></span><span class="sd-top-brand">Signal Desk</span>'
             . '<nav class="sd-top-nav" aria-label="Main">' . $tabs . '</nav></div>'
             . '<div class="sd-top-right">' . $live
             . '<form method="post" action="/logout" class="sd-top-form"><input type="hidden" name="csrf" value="' . self::e($csrf) . '"><button type="submit" class="sd-top-logout" title="Signed in as ' . self::e($user['name']) . '"><span class="sd-top-chip">' . self::e($user['name']) . ' · Log out</span></button></form>'
-            . '</div></div></header>'
+            . '</div></div></header>' . $subRow
             . '<main id="app" class="' . ($wide ? 'sd-o-main' : 'mx-auto max-w-3xl px-3 pb-16 pt-4 sm:px-4') . '"><p class="flex items-center gap-2 text-sm text-white/70"><span class="sd-spinner"></span> Loading…</p></main>'
             . '</div><script src="' . self::e(App::asset('app.js')) . '" defer></script></body></html>';
     }
 
     public static function notFound(): string
     {
-        return self::head('Not found · Signal Desk') . '<body class="antialiased"><main class="flex min-h-dvh items-center justify-center px-4"><p class="text-white/70">Page not found. <a class="text-pink-soft underline" href="/signals">Back to Signals</a></p></main></body></html>';
+        return self::head('Not found · Signal Desk') . '<body class="antialiased"><main class="flex min-h-dvh items-center justify-center px-4"><p class="text-white/70">Page not found. <a class="text-pink-soft underline" href="/bd/signals">Back to Signals</a></p></main></body></html>';
     }
 
     public static function setupError(string $message): string

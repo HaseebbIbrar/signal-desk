@@ -273,7 +273,7 @@ test('outreach design: mockup tokens, a colour for every status and channel, no 
     ok(!preg_match('/\.style\.(?!width\b)[a-zA-Z]/', $js), 'only el.style.width (CSSOM) is used');
     ok(!preg_match('/innerHTML\s*=/', $js), 'no innerHTML');
     $page = substr($js, strpos($js, 'function outreachPage'), 40000);
-    foreach (['Outreach dashboard', 'By channel', 'From reach to business', 'Needs action', 'Funnel: signal to new client', 'Running campaigns', 'Live lead board', 'Board by stage',
+    foreach (['"Dashboard"', 'By channel', 'From reach to business', 'Needs action', 'Funnel: signal to new client', 'Running campaigns', 'Live lead board', 'Board by stage',
         'Meetings from it', 'Channel chips: filled = responded'] as $text) ok(str_contains($page, $text), "mockup wording: $text");
     $render = substr($page, strpos($page, 'function renderBody'), 8000);
     $order = array_map(fn ($t) => strpos($render, $t), ['"Reach and results"', 'head("By channel"', 'head("From reach to business"', 'needsCard(d.needs)', 'funnelCard(d.funnel', 'head("Running campaigns"']);

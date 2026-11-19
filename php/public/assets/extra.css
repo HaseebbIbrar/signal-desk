@@ -222,6 +222,31 @@
 .sd-top .sd-top-tab-strong { box-sizing: border-box; display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; border-bottom: 2px solid transparent; font-weight: 600; }
 .sd-top .sd-top-tab-on { color: #fff; border-bottom: 2px solid var(--sd-accent); font-weight: 600; }
 .sd-top-badge { margin-left: 4px; font-size: 12px; padding: 1px 7px; border-radius: 999px; background: var(--sd-call); color: var(--sd-ink); }
+.sd-top-badge[hidden] { display: none; }
+#sd-badge-inbox { background: var(--sd-accent); color: #fff; }
+/* sub-tabs: a row of pill tabs under the top bar (same look as .sd-btn, 44 px targets); wraps on a phone */
+.sd-sub { font-family: Inter, system-ui, sans-serif; line-height: normal; }
+.sd-sub-in { box-sizing: border-box; max-width: 1440px; margin: 0 auto; padding: 16px 24px 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.sd-sub .sd-sub-tab { box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 16px; border-radius: 999px;
+  border: 1px solid var(--sd-control-border); background: var(--sd-card); color: var(--sd-text); font-size: 14px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+.sd-sub .sd-sub-tab:hover { border-color: var(--sd-link); color: var(--sd-text); }
+.sd-sub .sd-sub-tab-on, .sd-sub .sd-sub-tab-on:hover { background: var(--sd-accent); border-color: var(--sd-accent); color: #fff; font-weight: 600; }
+.sd-sub .sd-sub-tab:focus-visible { outline: 2px solid var(--sd-link); outline-offset: 2px; }
+.sd-sub-count { font-size: 12px; opacity: 0.85; }
+.sd-sub-count:empty { display: none; }
+/* phone: the 5 top tabs stay on one row and scroll sideways inside the bar (never the page) */
+@media (max-width: 899px) {
+  .sd-top-left { width: 100%; min-width: 0; flex-wrap: nowrap; }
+  .sd-top-in { padding: 16px 16px 0; }
+  .sd-top-nav { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; margin-left: 8px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .sd-top-nav::-webkit-scrollbar { display: none; }
+  .sd-top .sd-top-tab-strong { flex: 0 0 auto; white-space: nowrap; font-size: 15px; }
+  .sd-sub-in { padding: 12px 16px 0; }
+}
+@media (max-width: 520px) {
+  .sd-top-left { flex-wrap: wrap; }
+  .sd-top-nav { flex-basis: 100%; margin-left: 0; }
+}
 .sd-top-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .sd-top-form { margin: 0; }
 .sd-top-logout { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }

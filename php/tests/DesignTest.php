@@ -16,30 +16,45 @@ function t_design_config(string $storage, string $lemlist = 'mock'): array
     ], '/p');
 }
 
-test('Top bar: one row with the tabs in mockup order, Calls with its open-task badge, the live status and log out', function () {
+test('Top bar: one row with the 5 top tabs, Calls and Inbox badges, the live status and log out; sub-tabs as a pill row under it', function () {
     [$store, , $dir] = t_lem_synced();
     $store->setMeta('last_event_at', '2026-11-16T09:00:00Z');
     $due = \SignalDesk\CallDesk::dueCount($store);
     ok($due > 0, 'mock has due tasks');
-    $html = Views::shell('outreach', ['email' => 'a@x.test', 'name' => 'Jonathan Perkins'], t_design_config($dir));
-    eq(1, substr_count($html, '<nav'), 'one nav row, no second one');
+    \SignalDesk\JsonStore::write("$dir/" . \SignalDesk\CallDesk::UNREAD_FILE, ['count' => 3, 'at' => time()]);
+    $html = Views::shell('dashboard', ['email' => 'a@x.test', 'name' => 'Jonathan Perkins'], t_design_config($dir));
     ok((bool) preg_match('#<header class="sd-top">.*<span class="sd-top-brand">Signal Desk</span><nav class="sd-top-nav" aria-label="Main">#s', $html), 'logo and tabs on the same line');
-    preg_match_all('#<a href="(/[a-z]+)"[^>]*class="sd-top-tab[^"]*">([^<]+)#', $html, $m);
-    eq(['Signals', 'Verified', 'HR signals', 'Candidates', 'Lists', 'Outreach', 'Calls'], array_map('trim', $m[2]));
-    eq(['/signals', '/verified', '/hr', '/candidates', '/lists', '/outreach', '/calls'], $m[1]);
-    ok(str_contains($html, 'aria-current="page" class="sd-top-tab sd-top-tab-strong sd-top-tab-on">Outreach'), 'Outreach is the active tab');
-    ok(str_contains($html, '>Calls <span class="sd-top-badge">' . $due . '</span>'), 'Calls badge = open (due) call + manual tasks');
+    preg_match_all('#<a href="([^"]+)"[^>]*class="sd-top-tab[^"]*" data-top="([a-z]+)">([^<]+)#', $html, $m);
+    eq(['Business Development', 'Candidate Sourcing', 'Dashboard', 'Calls', 'Inbox'], array_map('trim', $m[3]));
+    eq(['/bd/signals', '/sourcing/candidates', '/dashboard', '/calls/tasks', '/inbox'], $m[1], 'first sub-tab the first time');
+    ok(str_contains($html, 'aria-current="page" class="sd-top-tab sd-top-tab-strong sd-top-tab-on" data-top="dashboard">Dashboard'), 'Dashboard is the active tab');
+    ok(str_contains($html, '>Calls <span id="sd-badge-calls" class="sd-top-badge">' . $due . '</span>'), 'Calls badge = open (due) call + manual tasks');
+    ok(str_contains($html, '>Inbox <span id="sd-badge-inbox" class="sd-top-badge">3</span>'), 'Inbox badge = unread conversations');
+    ok(!str_contains($html, 'class="sd-sub"'), 'Dashboard has no sub-tabs');
+    ok(str_contains($html, '<title>Dashboard · Signal Desk</title>'));
     ok(str_contains($html, '<span id="sd-live" class="sd-live" data-at="2026-11-16T09:00:00Z">'), 'live status from the last webhook event');
     ok(str_contains($html, 'Jonathan Perkins · Log out'), 'user and log out on the right');
     ok(str_contains($html, '<body class="antialiased sd-o-body"') && str_contains($html, '<main id="app" class="sd-o-main">'), 'mockup page frame on the lemlist pages');
-    $other = Views::shell('signals', ['email' => 'a@x.test', 'name' => 'A'], t_design_config($dir));
-    ok(!str_contains($other, 'sd-o-body') && str_contains($other, 'max-w-3xl'), 'other pages keep their layout');
-    ok(str_contains(Views::shell('calls', ['email' => 'a@x.test', 'name' => 'A'], t_design_config($dir)), 'data-page="calls"'), 'Calls page');
+    $bd = Views::shell('verified', ['email' => 'a@x.test', 'name' => 'A'], t_design_config($dir));
+    ok(!str_contains($bd, 'sd-o-body') && str_contains($bd, 'max-w-3xl'), 'other pages keep their layout');
+    ok(str_contains($bd, 'aria-current="true" class="sd-top-tab sd-top-tab-strong sd-top-tab-on" data-top="bd">Business Development'), 'active top tab');
+    preg_match_all('#<a href="([^"]+)" class="(sd-sub-tab[^"]*)"[^>]*data-sub="([a-z]+)">([^<]+)#', $bd, $s);
+    eq(['/bd/signals', '/bd/verified', '/bd/hr'], $s[1]);
+    eq(['Signals', 'Verified', 'HR signals'], array_map('trim', $s[4]));
+    eq(['sd-sub-tab', 'sd-sub-tab sd-sub-tab-on', 'sd-sub-tab'], $s[2], 'active sub-tab highlighted');
+    ok(str_contains($bd, 'class="sd-sub-tab sd-sub-tab-on" aria-current="page" data-sub="verified">'));
+    ok(str_contains($bd, '<nav class="sd-sub" aria-label="Business Development">') && str_contains($bd, '<title>Verified · Business Development · Signal Desk</title>'));
+    $calls = Views::shell('manual', ['email' => 'a@x.test', 'name' => 'A'], t_design_config($dir));
+    ok(str_contains($calls, 'data-page="manual"') && str_contains($calls, 'data-sub="calls">Call tasks <span class="sd-sub-count" data-count="calls"></span>'), 'Calls sub-tabs with counts');
+    $src = Views::shell('candidates', ['email' => 'a@x.test', 'name' => 'A'], t_design_config($dir));
+    ok(str_contains($src, 'href="/sourcing/lists"') && str_contains($src, 'data-sub="candidates">Candidates'), 'Candidate Sourcing sub-tabs');
+    \SignalDesk\JsonStore::write("$dir/" . \SignalDesk\CallDesk::UNREAD_FILE, ['count' => 0, 'at' => time()]);
+    ok(str_contains(Views::shell('inbox', ['email' => 'a@x.test', 'name' => 'A'], t_design_config($dir)), '<span id="sd-badge-inbox" class="sd-top-badge" hidden>0</span>'), 'no unread: badge hidden');
     $off = Views::shell('signals', ['email' => 'a@x.test', 'name' => 'A'], t_design_config(tmpdir(), 'off'));
-    ok(!str_contains($off, '/outreach') && !str_contains($off, '/calls') && !str_contains($off, 'sd-live'), 'lemlist off: no Outreach/Calls tabs, no live status');
+    ok(!str_contains($off, '/dashboard') && !str_contains($off, '/calls') && !str_contains($off, '/inbox') && !str_contains($off, 'sd-live'), 'lemlist off: only Business Development and Candidate Sourcing');
     $js = (string) file_get_contents(__DIR__ . '/../public/assets/app.js');
-    ok(str_contains($js, 'else if (page === "calls") callsPage();') && !str_contains($js, 'Calls: coming soon'), 'the Calls tab is the SDR desk now');
-    foreach (['"SDR desk"', '"Call tasks"', '"Manual tasks"', '"Inbox"', '"Now calling"', '"1. Did they answer?"', '"2. Outcome"', '"3. Note (goes to lemlist)"', 'Save & complete task in lemlist',
+    ok(str_contains($js, 'else if (page === "calls" || page === "manual" || page === "inbox") callsPage(page);') && !str_contains($js, 'Calls: coming soon'), 'Calls and Inbox pages');
+    foreach (['"Call tasks"', '"Manual tasks"', '"Inbox"', '"Now calling"', '"1. Did they answer?"', '"2. Outcome"', '"3. Note (goes to lemlist)"', 'Save & complete task in lemlist',
         '"Send via lemlist"', 'Approximate preview'] as $t) ok(str_contains($js, $t), "Calls tab wording $t");
 });
 

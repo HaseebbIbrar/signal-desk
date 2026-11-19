@@ -149,7 +149,7 @@
     if (sub) q.push("sub=" + encodeURIComponent(sub));
     if (group) q.push("group=" + encodeURIComponent(group));
     if (jobUrl) q.push("jobUrl=" + encodeURIComponent(jobUrl));
-    return "/candidates" + (q.length ? "?" + q.join("&") : "") + (jobUrl ? "#jd" : "");
+    return "/sourcing/candidates" + (q.length ? "?" + q.join("&") : "") + (jobUrl ? "#jd" : "");
   }
   function matchLink(title, sub, group, jobUrl) {
     if (!jdOn || !(title || sub)) return null;
@@ -1031,7 +1031,7 @@
     if (page.jobUrl) fetchJob();
   }
 
-  // ================================================================ Outreach page (lemlist, read-only)
+  // ================================================================ Dashboard page (was "Outreach"; lemlist, read-only)
   // Layout and look follow the approved mockup (signal-desk-design/outreach-mockup.dc.html). No inline styles (CSP):
   // colours come from classes that set --c (sd-c-*, sd-st-*, sd-f-*), widths through el.style.width (the "width" key of h()).
   // The selection lives in the URL (?c=ids&p=7) and is remembered per user.
@@ -1071,10 +1071,20 @@
       dlg.querySelector(".sd-btn").focus();
     });
   }
-  function callsPage() {
-    var subs = ["calls", "manual", "inbox"];
-    var q0 = new URLSearchParams(window.location.search);
-    var st = { sub: subs.indexOf(q0.get("sub")) >= 0 ? q0.get("sub") : "calls", data: null, error: null, msg: null, sel: null, ans: null, res: null, note: "", cb: "",
+  // Top-bar badges: Calls = open call + manual tasks, Inbox = unread conversations
+  function setBadge(id, n) {
+    var b = document.getElementById(id);
+    if (!b) return;
+    b.textContent = String(n || 0);
+    if (n > 0) b.removeAttribute("hidden"); else b.setAttribute("hidden", "");
+  }
+  function refreshInboxBadge() {
+    if (!document.getElementById("sd-badge-inbox")) return;
+    api("/api/inbox/unread").then(function (d) { setBadge("sd-badge-inbox", d.unread); }, function () { /* keep the cached number */ });
+  }
+  function callsPage(sub) {
+    var wantTask = new URLSearchParams(window.location.search).get("task"); // "Log call" on a manual call task
+    var st = { sub: sub === "manual" || sub === "inbox" ? sub : "calls", data: null, error: null, msg: null, sel: null, ans: null, res: null, note: "", cb: "",
       attempt: newAttempt(), caller: "", logged: {}, mFilter: "all", mDone: {}, busy: false,
       inbox: { filter: "all", list: null, unread: 0, sel: null, thread: null, ch: "email", draft: "", loading: false, sent: [] }, seen: {} };
     var MT = { call: ["Call again", "sd-c-call"], li: ["LinkedIn message", "sd-c-message"], email: ["Email to review", "sd-c-email"], ooo: ["Out of office", "sd-c-fin"],
@@ -1124,15 +1134,21 @@
       return api("/api/calls").then(function (d) {
         st.data = d; st.error = null;
         var open = d.queue.filter(function (q) { return !st.logged[q.id]; });
+        if (wantTask && d.queue.some(function (q) { return q.id === wantTask; })) { st.sel = wantTask; resetCall(); }
+        wantTask = null;
         if (!st.sel || !d.queue.some(function (q) { return q.id === st.sel; })) { st.sel = open.length ? open[0].id : null; resetCall(); }
-        var b = document.querySelector(".sd-top-badge");
-        if (b) b.textContent = String(d.counts.badge);
+        setBadge("sd-badge-calls", d.counts.badge);
+        [["calls", d.counts.calls], ["manual", d.counts.manual]].forEach(function (c) {
+          var el = document.querySelector('.sd-sub-count[data-count="' + c[0] + '"]');
+          if (el) el.textContent = String(c[1]);
+        });
       }, function (e) { st.error = e.message; }).then(render);
     }
     function loadInbox(keepThread) {
       st.inbox.loading = !st.inbox.list;
       return api("/api/calls/inbox?filter=" + encodeURIComponent(st.inbox.filter)).then(function (d) {
         st.inbox.list = d.conversations; st.inbox.unread = d.unread; st.inbox.loading = false;
+        setBadge("sd-badge-inbox", d.unread);
         if (!st.inbox.sel && d.conversations.length) openThread(d.conversations[0].contactId);
         else if (keepThread && st.inbox.sel) openThread(st.inbox.sel, true);
       }, function (e) { st.inbox.loading = false; st.inbox.error = e.message; }).then(render);
@@ -1145,6 +1161,7 @@
         if (!t.canLinkedin) st.inbox.ch = "email";
         else if (!quiet) { var c = (st.inbox.list || []).filter(function (x) { return x.contactId === contactId; })[0]; st.inbox.ch = c && c.channel === "linkedin" ? "linkedin" : "email"; }
         if (t.markedRead) (st.inbox.list || []).forEach(function (x) { if (x.contactId === contactId && x.unread) { x.unread = false; st.inbox.unread = Math.max(0, st.inbox.unread - 1); } });
+        if (t.markedRead) setBadge("sd-badge-inbox", st.inbox.unread);
       }, function (e) { st.inbox.error = e.message; }).then(render);
     }
     // the call script (the step's lead variable, filled in) with a Copy button; the raw step text when the lead has none
@@ -1179,23 +1196,9 @@
         h("div", { class: "sd-k-vm-body" }, h("p", { class: "sd-k-script-text", text: vm.text }), h("div", null, copyBtn(vm.text))));
     }
     function resetCall() { st.ans = null; st.res = null; st.note = ""; st.cb = ""; st.attempt = newAttempt(); }
-    function setSub(s) {
-      st.sub = s; st.msg = null;
-      try { window.history.replaceState(null, "", "/calls" + (s === "calls" ? "" : "?sub=" + s)); } catch (e) { /* ignore */ }
-      if (s === "inbox" && !st.inbox.list) loadInbox();
-      render();
-    }
-
-    // ---------------------------------------------------------- header with the three sub-tabs
+    // ---------------------------------------------------------- title (the sub-tabs are the pill row under the top bar)
     function header() {
-      var d = st.data;
-      var tabs = [["calls", "Call tasks", d ? d.counts.calls : ""], ["manual", "Manual tasks", d ? d.counts.manual : ""], ["inbox", "Inbox", st.inbox.unread ? st.inbox.unread + " new" : ""]];
-      return h("div", { class: "sd-o-titlebar" }, h("h1", { class: "sd-o-h1", text: "SDR desk" }),
-        h("div", { class: "sd-o-group", role: "group", "aria-label": "Section" }, tabs.map(function (t) {
-          var b = btn(t[1] + " ", st.sub === t[0], function () { setSub(t[0]); });
-          b.appendChild(h("span", { class: "sd-k-tabcount", text: String(t[2]) }));
-          return b;
-        })));
+      return h("div", { class: "sd-o-titlebar" }, h("h1", { class: "sd-o-h1", text: st.sub === "inbox" ? "Inbox" : "SDR desk" }));
     }
     function banners() {
       var d = st.data, out = [];
@@ -1331,7 +1334,7 @@
         var right = h("div", { class: "sd-o-wrap" }, h("span", { class: "sd-k-due" + (du.late ? " sd-k-late" : " sd-muted"), text: du.text }));
         if (closed) right.appendChild(h("span", { class: "sd-k-closed sd-pill-fill " + (closed === "Skipped" || closed === "Preview" ? "sd-c-fin" : "sd-c-int"), text: closed }));
         else {
-          var primary = m.kind === "manualCall" ? btn("Log call", true, function () { st.sel = m.id; resetCall(); setSub("calls"); }, null)
+          var primary = m.kind === "manualCall" ? btn("Log call", true, function () { window.location.href = "/calls/tasks?task=" + encodeURIComponent(m.id); }, null)
             : m.kind === "message" ? btn("Send", true, function () { manualAction(m, "send"); }) : btn("Done", true, function () { manualAction(m, "done"); });
           primary.removeAttribute("aria-pressed");
           var skip = btn("Skip", null, function () { manualAction(m, "skip"); });
@@ -1461,16 +1464,16 @@
       ticks++;
       var typing = document.activeElement && (document.activeElement.tagName === "TEXTAREA" || document.activeElement.tagName === "INPUT");
       api("/api/calls/updates").then(function (u) {
-        var b = document.querySelector(".sd-top-badge");
-        if (b) b.textContent = String(u.badge);
+        setBadge("sd-badge-calls", u.badge);
         var changed = function (k) { var v = u[k] || 0; var was = st.seen[k]; st.seen[k] = v; return was !== undefined && was !== v; };
         var tasks = changed("tasksAt"), inbox = changed("inboxAt"), any = changed("eventAt");
         if ((tasks || any || ticks % 4 === 0) && st.sub !== "inbox" && !typing && st.ans === null) load();
         if ((inbox || ticks % 4 === 0) && st.inbox.list && !typing) loadInbox(true);
+        else if (inbox && st.sub !== "inbox") refreshInboxBadge();
       }, function () { /* offline: try again next tick */ });
     }, 15000);
     render();
-    load().then(function () { if (st.sub === "inbox") loadInbox(); else api("/api/calls/inbox").then(function (d) { st.inbox.unread = d.unread; st.inbox.list = st.inbox.list || null; render(); }, function () { }); });
+    load().then(function () { if (st.sub === "inbox") loadInbox(); else refreshInboxBadge(); });
   }
 
   var OUTREACH_STATUS_LABEL = { "Replied": "Replied: needs outcome" };
@@ -1507,7 +1510,7 @@
       if (st.p !== null) q.push("p=" + encodeURIComponent(st.p));
       return api("/api/outreach" + (q.length ? "?" + q.join("&") : "")).then(function (d) {
         st.data = d; st.error = null; st.c = d.selection.all ? "" : d.selection.ids.join(","); st.p = d.selection.p;
-        try { window.history.replaceState(null, "", "/outreach" + d.selection.query); } catch (e) { /* ignore */ }
+        try { window.history.replaceState(null, "", "/dashboard" + d.selection.query); } catch (e) { /* ignore */ }
         if (st.compare && st.compareIds.length >= 2) loadCompare();
       }, function (e) { st.error = e.message; }).then(function () { st.loading = false; renderTop(); renderBody(); if (!quiet) { st.board.page = 1; loadBoard(); } else loadBoard(true); });
     }
@@ -1575,7 +1578,7 @@
       var label = !d ? "Campaigns: …" : d.selection.all ? "Campaigns: All running (" + n + ")" : "Campaigns: " + d.selection.ids.length + " of " + n;
       if (d) liveStatus(d.dashboard.eventAt, d.dashboard.syncedAt);
       top.appendChild(h("div", { class: "sd-o-titlebar" },
-        h("h1", { class: "sd-o-h1", text: "Outreach dashboard" }),
+        h("h1", { class: "sd-o-h1", text: "Dashboard" }),
         h("div", { class: "sd-o-actions" },
           h("div", { class: "sd-o-group", role: "group", "aria-label": "Period" }, PERIODS.map(function (x) { return btn(x[1], st.p === x[0], function () { st.p = x[0]; load(); }); })),
           h("button", { type: "button", class: "sd-btn" + (st.picker ? " sd-btn-on" : ""), "aria-expanded": st.picker ? "true" : "false", onclick: function () { st.picker = !st.picker; st.draft = null; renderTop(); }, text: label + " ▾" }),
@@ -2039,10 +2042,15 @@
   if (page === "signals") signalsPage();
   else if (page === "verified") verifiedPage();
   else if (page === "hr") verifiedPage(HR_CFG);
-  else if (page === "outreach") outreachPage();
-  else if (page === "calls") callsPage();
+  else if (page === "dashboard") outreachPage();
+  else if (page === "calls" || page === "manual" || page === "inbox") callsPage(page);
   else if (page === "candidates") candidatesPage();
   else if (page === "lists") listsPage();
+  if (page !== "calls" && page !== "manual" && page !== "inbox") refreshInboxBadge();
+  (function () { // phone: the top tabs scroll sideways inside the bar; bring the active one into view (the page itself does not move)
+    var nav = document.querySelector(".sd-top-nav"), on = nav && nav.querySelector(".sd-top-tab-on");
+    if (nav && on && nav.scrollWidth > nav.clientWidth) { var r = on.getBoundingClientRect(), n = nav.getBoundingClientRect(); nav.scrollLeft += r.left - n.left - (nav.clientWidth - r.width) / 2; }
+  })();
   liveStatus();
   setInterval(function () { liveStatus(); }, 10000);
 })();

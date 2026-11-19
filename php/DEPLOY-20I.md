@@ -134,6 +134,24 @@ Use fake data first; nothing touches SharePoint.
 
 The app refuses to start if `APP_ENV=development` points at the master's item id, if dev and master ids are equal, or if `WORKBOOK_BACKEND=mock` is combined with `APP_ENV=production`.
 
+## Navigation (since 19 Nov 2026)
+
+Five top tabs; the ones with sections show them as a row of pill tabs under the top bar:
+
+| Top tab | Sub-tabs (address) |
+|---|---|
+| **Business Development** | Signals `/bd/signals` · Verified `/bd/verified` · HR signals `/bd/hr` |
+| **Candidate Sourcing** | Candidates `/sourcing/candidates` · Lists `/sourcing/lists` (Lists only when Atlas is on) |
+| **Dashboard** | `/dashboard` (the former Outreach page, same content) |
+| **Calls** (badge: open call + manual tasks) | Call tasks `/calls/tasks` · Manual tasks `/calls/manual` |
+| **Inbox** (badge: unread conversations) | `/inbox` |
+
+Dashboard, Calls and Inbox appear when lemlist is on. Clicking a top tab opens the sub-tab you used last (remembered per user on the server, `storage/nav-prefs.json`, keyed by a hash of the login); the first time it opens the first one. `/` opens Business Development the same way.
+
+Old links keep working with a permanent redirect (301), query included: `/signals`, `/verified`, `/hr` → `/bd/…`; `/candidates`, `/lists` → `/sourcing/…` (Atlas badge links on signal cards included); `/outreach?c=…&p=…` → `/dashboard?c=…&p=…`; `/calls` → `/calls/tasks`, `/calls?sub=manual` → `/calls/manual`, `/calls?sub=inbox` → `/inbox`.
+
+The Inbox badge is counted from lemlist at most every 2 minutes (and at once after a reply webhook), cached in `storage/inbox-unread.json` (a number only), so the top bar never waits for lemlist.
+
 ## Candidate Desk (Atlas, read-only)
 
 The **Candidates** page and the **Atlas** badges on Signals and Verified cards use your **6 Atlas candidate pools**. Each pool is one list with no Permanent/Freelance split:
@@ -373,9 +391,9 @@ Date Verified	Verified By	Date Found	Company	Domain	Job Title	Role Group	Role Su
 - On the **Hr signals** tab the app only ever writes column **M** and appends rows; it never clears or deletes rows, and never writes S, T or U (fill name, title and note in Excel, as on the verify tab).
 - Approved rows get Status **Ready to push** and **Source Row** = the row number on the Hr signals tab. The same person is never sent twice for the same job, and **Undo** works only for the app's own last HR approval.
 
-## lemlist (Outreach & Calls) — Phase 1: data sync and webhook
+## lemlist (Dashboard, Calls & Inbox) — Phase 1: data sync and webhook
 
-Signal Desk reads your lemlist campaigns into its own database, **storage/lemlist.sqlite**, so the Outreach and Calls tabs (next phases) are fast. Phase 1 adds no new screen yet; check it on `/health.php`.
+Signal Desk reads your lemlist campaigns into its own database, **storage/lemlist.sqlite**, so the Dashboard, Calls and Inbox tabs are fast. Phase 1 adds no new screen yet; check it on `/health.php`.
 
 **1. config.php**
 ```php
@@ -431,11 +449,11 @@ php bin/lemlist-sync.php --check-db
 
 **/health.php rows:** key set and reachable · plan / calls API · webhook registered (FAIL if lemlist disabled it) · last webhook event (WARN after 24 h without one) · last sync (WARN after 1 h) · campaigns, leads (linked to DMs) and open tasks synced · who may send.
 
-## lemlist — Phase 2: the Outreach tab
+## lemlist — Phase 2: the Dashboard tab (was "Outreach")
 
-A new tab **Outreach** (shown when lemlist is on). It reads only Signal Desk's own copy (`storage/lemlist.sqlite`, filled by the cron above) and refreshes every minute. It sends nothing to lemlist.
+A tab **Dashboard** (called "Outreach" until 19 Nov 2026; shown when lemlist is on). It reads only Signal Desk's own copy (`storage/lemlist.sqlite`, filled by the cron above) and refreshes every minute. It sends nothing to lemlist.
 
-**Look:** the Outreach tab follows the approved mockup (`signal-desk-design/outreach-mockup.dc.html`). The top bar (logo, tabs, **Calls** with its open-task count, the green "Live · last lemlist event …" status and Log out) is one row on every page. **Calls** shows "coming soon" until the Calls tab is built. The Inter font is served by Signal Desk itself from `public/assets/fonts/` (no Google Fonts); upload that folder with the rest, and the new `.htaccess` rule that serves it.
+**Look:** the Dashboard tab follows the approved mockup (`signal-desk-design/outreach-mockup.dc.html`). The top bar (logo, tabs, **Calls** with its open-task count, the green "Live · last lemlist event …" status and Log out) is one row on every page. **Calls** shows "coming soon" until the Calls tab is built. The Inter font is served by Signal Desk itself from `public/assets/fonts/` (no Google Fonts); upload that folder with the rest, and the new `.htaccess` rule that serves it.
 
 **Running campaigns only.** Paused, ended, archived and draft campaigns are not shown anywhere on the tab. When a campaign stops running, it disappears at the next sync; its history stays in the database (12-month pruning) and comes back if the campaign is restarted. To also show stopped campaigns:
 ```php
@@ -445,7 +463,7 @@ A new tab **Outreach** (shown when lemlist is on). It reads only Signal Desk's o
 **Top of the tab:** Today / 7 days / 30 days (numbers compared with the period before; "Today" is compared with yesterday up to the same hour) and **Campaigns: All running (N)**:
 - tick campaigns (with search, Select all, Clear), or use a quick group made from the names ("All MPC", "All HR");
 - **Save** a selection under a name; saved selections are per Signal Desk user (`storage/outreach-selections.json`) and can be overwritten or deleted (×);
-- the selection is in the address bar (`/outreach?c=<campaign ids>&p=7`), so a link opens the same view; without one, your last selection opens;
+- the selection is in the address bar (`/dashboard?c=<campaign ids>&p=7`; old `/outreach?…` links redirect here), so a link opens the same view; without one, your last selection opens;
 - if a campaign in your selection stops running, it is dropped and a small notice says so.
 - **Compare**: pick 2 or 3 campaigns to see them side by side.
 
@@ -459,7 +477,7 @@ Click a lead for its timeline (signal found → approval → pushed → every st
 
 ## lemlist — Phase 3: the Calls tab (SDR desk)
 
-**Calls** in the top bar (its number = open call and manual tasks due) opens the SDR desk, in the same mockup design: **Call tasks**, **Manual tasks** and **Inbox**.
+**Calls** in the top bar (its number = open call and manual tasks due) opens the SDR desk, in the same mockup design: **Call tasks** and **Manual tasks**. The **Inbox** has its own top tab (since 19 Nov 2026), with the unread count as its badge.
 
 **1. config.php: the kill switch**
 ```php
@@ -479,11 +497,11 @@ With `'off'` the whole tab works in **preview mode**: every button runs all the 
 
 **Manual tasks:** the other manual steps, with filters. Message steps show the campaign step text with the lead's details filled in (**approximate preview**: lemlist sends the step as it is in the campaign). **Send** asks for confirmation, then lemlist sends the step. **Done** closes other tasks, **Skip** ignores the task in lemlist, and call-type tasks have **Log call**.
 
-**Inbox:** your lemlist conversations (All / Unread / Interested / Meeting); opening one marks it read. Labels: only our 4 (Interested, Meeting, Not interested, Out of office); other labels on the conversation are kept; missing ones are created if Jonathan is a lemlist admin. Reply by **Email** (in the same thread, from Jonathan's lemlist mailbox) or **LinkedIn** (campaign leads only), after a confirmation, without attachments. New replies show up live through the webhook (with a 60-second refresh as a fallback).
+**Inbox** (top tab): your lemlist conversations (All / Unread / Interested / Meeting); opening one marks it read. Labels: only our 4 (Interested, Meeting, Not interested, Out of office); other labels on the conversation are kept; missing ones are created if Jonathan is a lemlist admin. Reply by **Email** (in the same thread, from Jonathan's lemlist mailbox) or **LinkedIn** (campaign leads only), after a confirmation, without attachments. New replies show up live through the webhook (with a 60-second refresh as a fallback).
 
 **Limits per user and hour:** 30 messages sent, 100 calls logged, 200 task changes, 100 label changes.
 
-**Outreach numbers:** calls logged here count as calls and conversations; a positive call sets the lead to Interested (negative: Not interested); the Interested / Meeting / Not interested labels set the same outcomes.
+**Dashboard numbers:** calls logged here count as calls and conversations; a positive call sets the lead to Interested (negative: Not interested); the Interested / Meeting / Not interested labels set the same outcomes.
 
 **Calls API:** logging calls needs lemlist **Email Pro or above**. Without it the tab says so, and manual tasks and the inbox keep working.
 
@@ -547,6 +565,6 @@ Rejections are stored only in `storage/rejections.json`, never in the workbook. 
 | "View only" on the Calls tab | Your login email is not in `LEMLIST_SENDER_ALLOWED`. |
 | "Limit reached: at most 30 messages sent per hour" | The per-user hourly limit. Wait a bit, or ask for a higher limit. |
 | "This task is already closed in lemlist" | Someone completed it in lemlist (or the dialer) meanwhile. The queue refreshed; nothing was logged twice. |
-| Outreach shows "No running lemlist campaigns yet" | The lemlist cron hasn't run since the upload, or no campaign is running. Wait for the next run (every 15 minutes) and check `/health.php`. |
-| A campaign is missing from the Outreach picker | Only running campaigns are shown. Restart it in lemlist (it comes back with its history at the next sync) or set `'LEMLIST_SHOW_STOPPED' => 'true'`. |
-| Outreach shows New jobs / Deals / New clients as 0 | They come from Atlas once an hour and match the lead's company name; check the Atlas rows on `/health.php` and that the company is spelled the same in Atlas. |
+| Dashboard shows "No running lemlist campaigns yet" | The lemlist cron hasn't run since the upload, or no campaign is running. Wait for the next run (every 15 minutes) and check `/health.php`. |
+| A campaign is missing from the Dashboard picker | Only running campaigns are shown. Restart it in lemlist (it comes back with its history at the next sync) or set `'LEMLIST_SHOW_STOPPED' => 'true'`. |
+| Dashboard shows New jobs / Deals / New clients as 0 | They come from Atlas once an hour and match the lead's company name; check the Atlas rows on `/health.php` and that the company is spelled the same in Atlas. |

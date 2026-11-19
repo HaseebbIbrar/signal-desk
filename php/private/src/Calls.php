@@ -705,6 +705,10 @@ final class CallDesk
         }
         usort($out, fn ($a, $b) => strcmp($b['at'], $a['at']));
         $unread = count(array_filter($out, fn ($c) => $c['unread']));
+        try {
+            JsonStore::write($this->store->dir . '/' . self::UNREAD_FILE, ['count' => $unread, 'at' => ($this->now)()]); // the Inbox badge on every page
+        } catch (\Throwable) {
+        }
         if ($filter === 'unread') $out = array_values(array_filter($out, fn ($c) => $c['unread']));
         elseif (in_array($filter, ['Interested', 'Meeting'], true)) $out = array_values(array_filter($out, fn ($c) => $c['label'] === $filter));
         return ['conversations' => $out, 'unread' => $unread, 'labels' => array_keys($labels['ours'])];
@@ -822,6 +826,29 @@ final class CallDesk
         if ($lead && $label !== null && isset(self::OUR_LABEL_OUTCOME[$label])) $this->setOutcome($lead, self::OUR_LABEL_OUTCOME[$label]);
         $this->audit('label', $ids, 'ok');
         return ['ok' => true, 'label' => $label, 'message' => $label ? "Label \"$label\" set in lemlist." : 'Label removed in lemlist.'];
+    }
+
+    public const UNREAD_FILE = 'inbox-unread.json';
+    public const UNREAD_TTL = 120;
+
+    /** Unread conversations as last counted (no lemlist request), null before the first count. */
+    public static function cachedUnread(string $dir): ?int
+    {
+        $c = JsonStore::read("$dir/" . self::UNREAD_FILE, null);
+        return is_array($c) && isset($c['count']) ? (int) $c['count'] : null;
+    }
+
+    /** The Inbox badge: re-counted from lemlist at most every 2 minutes, or at once after a reply webhook. */
+    public function unread(): array
+    {
+        $file = $this->store->dir . '/' . self::UNREAD_FILE;
+        $c = JsonStore::read($file, []) ?: [];
+        $at = (int) ($c['at'] ?? 0);
+        if ($at <= ($this->now)() - self::UNREAD_TTL || (int) $this->store->live('inbox_event_at', 0) > $at) {
+            $this->inbox('all');
+            $c = JsonStore::read($file, []) ?: [];
+        }
+        return ['unread' => (int) ($c['count'] ?? 0), 'at' => (int) ($c['at'] ?? 0)];
     }
 
     /** Cheap poll (local database only): when did the webhook last bring news? */

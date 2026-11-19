@@ -21,8 +21,8 @@ final class Health
     {
         $now ??= time();
         $mode = Lemlist::mode($config);
-        if ($mode === 'off') return [['lemlist (Outreach & Calls)', 'WARN', 'off: set LEMLIST_API_KEY in config.php to enable it']];
-        $rows = [['lemlist (Outreach & Calls)', 'OK', $mode === 'mock' ? 'mock (fake data)' : 'live']];
+        if ($mode === 'off') return [['lemlist (Dashboard, Calls & Inbox)', 'WARN', 'off: set LEMLIST_API_KEY in config.php to enable it']];
+        $rows = [['lemlist (Dashboard, Calls & Inbox)', 'OK', $mode === 'mock' ? 'mock (fake data)' : 'live']];
         if ($mode === 'lemlist') $rows[] = ['LEMLIST_API_KEY', 'OK', 'set'];
         $rows[] = ['lemlist writes (Calls tab)', 'OK', ($config['LEMLIST_WRITES'] ?? 'off') === 'on' ? 'on: calls, tasks, replies and labels are sent to lemlist'
             : 'off: preview mode, nothing is sent (set LEMLIST_WRITES to on after testing)'];
@@ -270,6 +270,6 @@ final class Health
         if ($warn) $summary .= "<p class=\"mb-3 text-warn\">$warn check(s) could not be verified (WARN): see the details and check them manually.</p>";
         return '<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Health · Signal Desk</title>' . Views::styles() . '</head>'
             . '<body class="antialiased"><main class="mx-auto max-w-3xl px-4 py-6"><h1 class="mb-2 text-lg font-semibold">Signal Desk health</h1>' . $summary
-            . '<table class="w-full text-left text-sm">' . $rows . '</table><p class="mt-4 text-sm"><a class="text-pink-soft underline" href="/signals">Back to Signals</a></p></main></body></html>';
+            . '<table class="w-full text-left text-sm">' . $rows . '</table><p class="mt-4 text-sm"><a class="text-pink-soft underline" href="/bd/signals">Back to Signals</a> · <a class="text-pink-soft underline" href="/dashboard">Dashboard</a></p></main></body></html>';
     }
 }
