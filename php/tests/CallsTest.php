@@ -246,12 +246,12 @@ test('inbox matching: email fallback, the same person in two running campaigns (
     $m = new MockLemlist();
     $m->addDemoContacts();
     [$d, $store, $mock] = t_desk([], 'jp@x.test', $m);
-    $c = array_column($d->inbox()['conversations'], null, 'contactId')['ctc_scope0001'];
+    $c = array_column($d->inbox('all')['conversations'], null, 'contactId')['ctc_scope0001'];
     eq(['lea_it28', 'Scope Cooling', 'Thursday MPC 2', 1, true, true], [$c['leadId'], $c['company'], $c['campaign'], $c['more'], $c['inCampaign'], $c['canLinkedin']]);
     eq(2, (int) $store->one("SELECT COUNT(*) FROM leads WHERE contact_id = 'ctc_scope0001'"), 'both campaigns remember the contactId');
     $mock->campaigns[3]['status'] = 'paused';
     $store->db->exec("UPDATE campaigns SET status = 'paused' WHERE id = 'cam_it000002'");
-    eq(['lea_it08', 'IT decision makers – Belgium', 1], (fn ($x) => [$x['leadId'], $x['campaign'], $x['more']])(array_column($d->inbox()['conversations'], null, 'contactId')['ctc_scope0001']), 'a running campaign wins over a newer paused one');
+    eq(['lea_it08', 'IT decision makers – Belgium', 1], (fn ($x) => [$x['leadId'], $x['campaign'], $x['more']])(array_column($d->inbox('all')['conversations'], null, 'contactId')['ctc_scope0001']), 'a running campaign wins over a newer paused one');
     $t = $d->thread('ctc_scope0001');
     eq([true, 'lea_it08', 'Manager Data & Analytics'], [$t['canLinkedin'], $t['leadId'], $t['jobTitle']]);
     $from = count($mock->calls);
@@ -259,38 +259,42 @@ test('inbox matching: email fallback, the same person in two running campaigns (
     eq([['POST', '/inbox/linkedin', ['sendUserId' => MockLemlist::USER, 'leadId' => 'lea_it08', 'contactId' => 'ctc_scope0001', 'message' => 'See you Tuesday']]], t_lem_writes($mock, $from));
     // LinkedIn URL fallback (no email in the conversation)
     $store->db->exec("UPDATE leads SET signal_track = 'HR', signal_job_title = 'Talent Acquisition Lead' WHERE lead_id = 'lea_hr01'");
-    $k = array_column($d->inbox()['conversations'], null, 'contactId')['ctc_kimli0001'];
+    $k = array_column($d->inbox('all')['conversations'], null, 'contactId')['ctc_kimli0001'];
     eq(['lea_hr01', 'Sample MSSP BV', true, 'HR · Talent Acquisition Lead'], [$k['leadId'], $k['company'], $k['canLinkedin'], $k['signal']], 'job signal shown with its track');
     // never another lemlist contact's lead: same email, but that lead already belongs to ctc_it02
     $mock->inbox['ctc_other001'] = ['_id' => 'ibx_other001', 'contactId' => 'ctc_other001', 'leadId' => '', 'email' => 'robin.replier@mail.example', 'channels' => ['email'],
         'lastActivityAt' => '2026-11-01T08:00:00.000Z', 'lastRepliedChannel' => 'email', 'users' => [], 'contact' => ['fullName' => 'Robin R.'], 'labels' => [],
         'thread' => [['_id' => 'act_o1', 'type' => 'emailsReplied', 'createdAt' => '2026-11-01T08:00:00.000Z', 'message' => 'x']]];
-    eq(false, array_column($d->inbox()['conversations'], null, 'contactId')['ctc_other001']['inCampaign']);
+    eq(false, array_column($d->inbox('all')['conversations'], null, 'contactId')['ctc_other001']['inCampaign']);
 });
 
-test('inbox snippet: latest message, HTML stripped, cut at 90; cached when a thread opens and from reply webhooks; never logged', function () {
+test('inbox snippet: the lead\'s last reply (never our message), "You: …" only when we wrote after it; fuller line from an opened thread or a reply webhook; never logged', function () {
     $m = new MockLemlist();
     $m->addDemoContacts();
     [$d, $store, $mock] = t_desk([], 'jp@x.test', $m);
-    $c = fn () => array_column($d->inbox()['conversations'], null, 'contactId');
-    eq('You: Hi Sam,', $c()['ctc_scope0001']['snippet'], 'before opening: lemlist\'s own one-line preview of the newest message (ours)');
+    $c = fn () => array_column($d->inbox('all')['conversations'], null, 'contactId');
+    $sam = $c()['ctc_scope0001'];
+    eq(['Hi Jonathan,', 'Hi Sam,', false, '2026-11-13T10:56:58.000Z', 'email'], [$sam['snippet'], $sam['youWrote'], $sam['yourTurn'], $sam['at'], $sam['channel']],
+        'lemlist\'s lastRepliedMessagePreview + lastRepliedAt; our later message as the second line');
     $GLOBALS['__events'] = [];
     $d->thread('ctc_scope0001');
     $sn = $c()['ctc_scope0001']['snippet'];
-    eq('You: Hi Sam, Thanks for coming back to me. I will send his CV this afternoon.', $sn, 'after opening: the whole last message, plain text');
+    eq('Hi Jonathan, Interesting profile. Is he open to a hybrid role in Oostkamp? Happy to see h…', $sn, 'after opening: the lead\'s whole last reply, plain text (not our message)');
     ok(!str_contains($sn, '<'), 'no HTML');
     $long = '<p>' . str_repeat('Interesting profile, please send it over. ', 5) . '</p>';
     eq(90, mb_strlen(CallDesk::snippet($long)));
     ok(str_ends_with(CallDesk::snippet($long), '…'));
-    // a reply arrives by webhook: it becomes the snippet
+    // a new reply: lemlist's preview is only its first line; the webhook brings the whole line
     $cfg = t_lem_config();
     LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'act_hk_scope', 'type' => 'emailsReplied', 'secret' => T_LEM_SECRET, 'contactId' => 'ctc_scope0001', 'leadId' => 'lea_it08',
         'createdAt' => '2026-11-16T12:00:00.000Z', 'text' => "Great,\nthanks! Tuesday 10:00 works for me."]), $store, fn () => T_CALL_NOW);
     HookBuffer::import($store);
+    $mock->inbox['ctc_scope0001']['thread'][] = ['_id' => 'act_hk_scope', 'type' => 'emailsReplied', 'createdAt' => '2026-11-16T12:00:00.000Z', 'message' => '<p>Great,</p><p>thanks! Tuesday 10:00 works for me.</p>'];
     $mock->inbox['ctc_scope0001']['lastActivityAt'] = '2026-11-16T12:00:00.000Z';
-    eq('Great, thanks! Tuesday 10:00 works for me.', $c()['ctc_scope0001']['snippet']);
+    $sam = $c()['ctc_scope0001'];
+    eq(['Great, thanks! Tuesday 10:00 works for me.', null, true], [$sam['snippet'], $sam['youWrote'], $sam['yourTurn']], 'their reply is last: no "You:" line, our turn');
     $log = json_encode($GLOBALS['__events']);
-    ok(!str_contains($log, 'Tuesday 10:00') && !str_contains($log, 'coming back to me'), 'message text never in the audit log');
+    ok(!str_contains($log, 'Tuesday 10:00') && !str_contains($log, 'hybrid role'), 'message text never in the audit log');
 });
 
 test('inbox labels feed Outreach for the matched lead (label set here, or already set in lemlist)', function () {

@@ -530,3 +530,7 @@ button.sd-o-action:hover { background: #33224f; }
 .sd-k-vm-sum:focus-visible { outline: 2px solid var(--sd-link); outline-offset: 2px; }
 .sd-k-vm-body { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 12px; }
 .sd-k-preview-call { border-left: 3px solid var(--sd-call); font-size: 14px; }
+/* inbox: the lead's reply first, our later message as a quiet second line, "Your turn" */
+.sd-k-in { color: var(--sd-signal); }
+.sd-k-youwrote { font-size: 12px; color: var(--sd-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-k-turn { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: var(--sd-accent); color: #fff; font-weight: 600; }

@@ -1080,16 +1080,17 @@
   }
   function refreshInboxBadge() {
     if (!document.getElementById("sd-badge-inbox")) return;
-    api("/api/inbox/unread").then(function (d) { setBadge("sd-badge-inbox", d.unread); }, function () { /* keep the cached number */ });
+    api("/api/inbox/unread").then(function (d) { setBadge("sd-badge-inbox", d.badge); }, function () { /* keep the cached number */ });
   }
   function callsPage(sub) {
     var wantTask = new URLSearchParams(window.location.search).get("task"); // "Log call" on a manual call task
     var st = { sub: sub === "manual" || sub === "inbox" ? sub : "calls", data: null, error: null, msg: null, sel: null, ans: null, res: null, note: "", cb: "",
       attempt: newAttempt(), caller: "", logged: {}, mFilter: "all", mDone: {}, busy: false,
-      inbox: { filter: "all", list: null, unread: 0, sel: null, thread: null, ch: "email", draft: "", loading: false, sent: [] }, seen: {} };
+      inbox: { filter: "needs", list: null, unread: 0, needs: 0, badge: 0, sel: null, thread: null, ch: "email", draft: "", loading: false, sent: [] }, seen: {} };
     var MT = { call: ["Call again", "sd-c-call"], li: ["LinkedIn message", "sd-c-message"], email: ["Email to review", "sd-c-email"], ooo: ["Out of office", "sd-c-fin"],
       visit: ["LinkedIn visit", "sd-c-invite"], task: ["Task", "sd-c-muted"] };
     var MF = [["all", "All"], ["call", "Calls"], ["li", "LinkedIn"], ["email", "Email"], ["ooo", "Out of office"], ["visit", "LinkedIn visit"], ["task", "Other"]];
+    var CH = { email: ["Email", "sd-c-email"], linkedin: ["LinkedIn", "sd-c-message"], whatsapp: ["WhatsApp", "sd-c-invite"], sms: ["SMS", "sd-c-call"] };
     var LBL = { Interested: "sd-c-int", Meeting: "sd-c-meet", "Not interested": "sd-c-bnc", "Out of office": "sd-c-fin" };
     var root = h("div", { class: "sd-o sd-o-stack" });
     clear(app);
@@ -1147,8 +1148,8 @@
     function loadInbox(keepThread) {
       st.inbox.loading = !st.inbox.list;
       return api("/api/calls/inbox?filter=" + encodeURIComponent(st.inbox.filter)).then(function (d) {
-        st.inbox.list = d.conversations; st.inbox.unread = d.unread; st.inbox.loading = false;
-        setBadge("sd-badge-inbox", d.unread);
+        st.inbox.list = d.conversations; st.inbox.unread = d.unread; st.inbox.needs = d.needs; st.inbox.badge = d.badge; st.inbox.loading = false;
+        setBadge("sd-badge-inbox", d.badge);
         if (!st.inbox.sel && d.conversations.length) openThread(d.conversations[0].contactId);
         else if (keepThread && st.inbox.sel) openThread(st.inbox.sel, true);
       }, function (e) { st.inbox.loading = false; st.inbox.error = e.message; }).then(render);
@@ -1160,8 +1161,12 @@
         st.inbox.thread = t;
         if (!t.canLinkedin) st.inbox.ch = "email";
         else if (!quiet) { var c = (st.inbox.list || []).filter(function (x) { return x.contactId === contactId; })[0]; st.inbox.ch = c && c.channel === "linkedin" ? "linkedin" : "email"; }
-        if (t.markedRead) (st.inbox.list || []).forEach(function (x) { if (x.contactId === contactId && x.unread) { x.unread = false; st.inbox.unread = Math.max(0, st.inbox.unread - 1); } });
-        if (t.markedRead) setBadge("sd-badge-inbox", st.inbox.unread);
+        if (t.markedRead) (st.inbox.list || []).forEach(function (x) {
+          if (x.contactId !== contactId || !x.unread) return;
+          x.unread = false; st.inbox.unread = Math.max(0, st.inbox.unread - 1);
+          if (!x.yourTurn) st.inbox.badge = Math.max(0, st.inbox.badge - 1); // the badge counts our turn + unread
+        });
+        if (t.markedRead) setBadge("sd-badge-inbox", st.inbox.badge);
       }, function (e) { st.inbox.error = e.message; }).then(render);
     }
     // the call script (the step's lead variable, filled in) with a Copy button; the raw step text when the lead has none
@@ -1374,19 +1379,23 @@
       var ib = st.inbox, d = st.data;
       var left = h("div", { class: "sd-k-ileft" });
       left.appendChild(h("div", { class: "sd-k-ihead" },
-        h("div", { class: "sd-o-between" }, h("h2", { class: "sd-o-h2", text: "Inbox" }), h("span", { class: "sd-muted sd-o-small", text: ib.unread + " unread · synced with lemlist" })),
-        h("div", { class: "sd-k-chips", role: "group", "aria-label": "Inbox filter" }, [["all", "All"], ["unread", "Unread"], ["Interested", "Interested"], ["Meeting", "Meeting"]].map(function (f) {
-          return btn(f[1], ib.filter === f[0], function () { ib.filter = f[0]; loadInbox(); }, "sd-btn-sm");
+        h("div", { class: "sd-o-between" }, h("h2", { class: "sd-o-h2", text: "Inbox" }), h("span", { class: "sd-muted sd-o-small", text: ib.needs + " need a reply · " + ib.unread + " unread · synced with lemlist" })),
+        h("div", { class: "sd-k-chips", role: "group", "aria-label": "Inbox filter" }, [["needs", "Needs reply"], ["all", "All"], ["unread", "Unread"], ["Interested", "Interested"], ["Meeting", "Meeting"]].map(function (f) {
+          var b = btn(f[1], ib.filter === f[0], function () { ib.filter = f[0]; loadInbox(); }, "sd-btn-sm");
+          if (f[0] === "needs" && ib.needs) b.appendChild(h("span", { class: "sd-k-tabcount", text: " " + ib.needs }));
+          return b;
         }))));
       if (ib.loading) left.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "Reading the lemlist inbox…" }));
-      else if (ib.list && !ib.list.length) left.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "No conversations here." }));
+      else if (ib.list && !ib.list.length) left.appendChild(h("p", { class: "sd-k-empty sd-muted", text: ib.filter === "needs" ? "Nothing waiting for a reply." : "No conversations here." }));
       (ib.list || []).forEach(function (c) {
         left.appendChild(h("button", { type: "button", class: "sd-k-conv" + (c.contactId === ib.sel ? " sd-k-conv-on" : ""), "aria-current": c.contactId === ib.sel ? "true" : null, onclick: function () { openThread(c.contactId); } },
           h("span", { class: "sd-o-between" }, h("span", { class: "sd-k-convname" + (c.unread ? " sd-k-unread" : "") }, h("span", { class: "sd-dot " + (c.unread ? "sd-c-accent" : "sd-k-nodot"), "aria-hidden": "true" }), c.name + (c.unread ? "" : "")),
             h("span", { class: "sd-muted sd-o-small", text: when(c.at) })),
           h("span", { class: "sd-muted sd-o-small", text: c.inCampaign ? [c.company, c.campaign + (c.more ? " +" + c.more + " more" : ""), c.signal].filter(Boolean).join(" · ") : "Not in a campaign" }),
-          h("span", { class: "sd-k-snippet", text: c.snippet }),
-          h("span", { class: "sd-k-chips6" }, h("span", { class: "sd-k-chip " + (c.channel === "linkedin" ? "sd-c-message" : "sd-c-email"), text: c.channel === "linkedin" ? "LinkedIn" : "Email" }),
+          h("span", { class: "sd-k-snippet" }, h("span", { class: "sd-k-in", "aria-label": "Their reply:", text: "↩ " }), c.snippet || "(no preview)"),
+          c.youWrote ? h("span", { class: "sd-k-youwrote", text: "You: " + c.youWrote }) : null,
+          h("span", { class: "sd-k-chips6" }, h("span", { class: "sd-k-chip " + (CH[c.channel] || CH.email)[1], text: (CH[c.channel] || CH.email)[0] }),
+            c.yourTurn ? h("span", { class: "sd-k-turn", text: "Your turn" }) : null,
             c.label ? h("span", { class: "sd-k-lbl " + (LBL[c.label] || "sd-c-muted"), text: c.label }) : null)));
       });
       var right = h("div", { class: "sd-k-iright" });
@@ -1435,6 +1444,14 @@
           if (r.preview) { st.msg = { kind: "warn", text: previewText(r) }; render(); return; }
           st.inbox.sent.push({ contactId: t.contactId, out: true, who: st.data.sender ? st.data.sender.name : "You", channel: ch === "email" ? "Email" : "LinkedIn", at: new Date().toISOString(), text: text });
           st.inbox.draft = "";
+          (st.inbox.list || []).forEach(function (x) { // answered: out of "Needs reply" now; lemlist confirms on the next refresh
+            if (x.contactId !== t.contactId || !x.yourTurn) return;
+            x.yourTurn = false; x.youWrote = text.replace(/\s+/g, " ").slice(0, 90);
+            st.inbox.needs = Math.max(0, st.inbox.needs - 1);
+            if (!x.unread) st.inbox.badge = Math.max(0, st.inbox.badge - 1);
+          });
+          if (st.inbox.filter === "needs") st.inbox.list = (st.inbox.list || []).filter(function (x) { return x.contactId !== t.contactId; });
+          setBadge("sd-badge-inbox", st.inbox.badge);
           st.msg = { kind: "ok", text: r.message };
           render();
         }, function (e) { say("error", e.message); });

@@ -20,7 +20,10 @@ final class MockLemlist
     public array $inbox = [];
     public array $labels = [];
     public array $sent = [];
-    public bool $returnLabels = true;   // whether GET /inbox includes each conversation's label ids
+    public bool $returnLabels = true;
+    /** Tests: GET /inbox rows and GET /inbox/{contactId} activities exactly as given (shaped like the real API). */
+    public ?array $rawInbox = null;
+    public array $rawThreads = [];   // whether GET /inbox includes each conversation's label ids
     private ?string $stateFile = null;
     private array $sequences = [];
     /** Campaign list returned by GET /campaigns (tests change statuses or add campaigns). */
@@ -173,6 +176,8 @@ final class MockLemlist
         $conv('ctc_hr02', 'lea_hr02', 'Cas Connected', ['linkedin'], false, [], [
             $msg('linkedinSent', '2026-11-07T18:05:00.000Z', 'Thanks for connecting, Cas!'),
             $msg('linkedinReplied', '2026-11-08T08:30:00.000Z', 'Interesting. Call me this week, mornings are best.')]);
+        $conv('ctc_sent0001', 'lea_it01', 'Ciso Example', ['email'], true, [], [ // sent-only: no reply yet (not in the Inbox)
+            $msg('emailsSent', '2026-11-12T08:00:00.000Z', '<p>Hi Ciso, last note from me.</p>', 'Re: Your CISO search')]);
         $conv('ctc_ext01', '', 'Alex Outsider', ['email'], true, [], [
             $msg('emailsReplied', '2026-11-05T10:00:00.000Z', '<p>Saw your post, do you also do contract roles?</p>')]);
     }
@@ -275,6 +280,11 @@ final class MockLemlist
         if ($method === 'GET' && $path === '/inbox') {
             if (($q['userId'] ?? '') === '') return $ok(['error' => 'User ID is required'], 400);
             $data = [];
+            if ($this->rawInbox !== null) {
+                $per = max(1, (int) ($q['limit'] ?? 50));
+                $pg = max(1, (int) ($q['page'] ?? 1));
+                return $ok(['data' => array_slice($this->rawInbox, ($pg - 1) * $per, $per), 'pagination' => ['totalItems' => count($this->rawInbox), 'currentPage' => $pg, 'totalPages' => (int) ceil(count($this->rawInbox) / $per)]]);
+            }
             $first = fn (array $m) => strtok(trim(html_entity_decode(strip_tags((string) preg_replace('~<br\s*/?>|</p>~i', "\n", (string) $m['message'])))), "\n") ?: '';
             foreach ($this->inbox as $c) {
                 $lead = $this->leadById((string) ($c['leadId'] ?? ''));
@@ -283,12 +293,20 @@ final class MockLemlist
                 $row = ['_id' => $c['_id'], 'contactId' => $c['contactId'], 'contactName' => $c['contact']['fullName'] ?? '',
                     'contactEmail' => $c['email'] ?? ($lead['email'] ?? null), 'contactLinkedinUrl' => $c['linkedinUrl'] ?? ($lead['linkedinUrl'] ?? null),
                     'lastActivityAt' => $c['lastActivityAt'], 'lastRepliedChannel' => $c['lastRepliedChannel'], 'channels' => $c['channels'], 'users' => $c['users'], 'labels' => $c['labels']];
-                if ($rep) $row += ['lastRepliedAt' => end($rep)['createdAt'], 'lastRepliedMessagePreview' => $first(end($rep))];
-                if ($snt) $row += ['lastSentAt' => end($snt)['createdAt'], 'lastSentMessagePreview' => $first(end($snt))];
+                // like live: separate last-reply and last-sent fields, isYourTurn = the lead wrote last
+                $row += ['lastRepliedAt' => $rep ? end($rep)['createdAt'] : null, 'lastRepliedChannel' => $rep ? (str_starts_with(end($rep)['type'], 'linkedin') ? 'linkedin' : 'email') : null,
+                    'lastRepliedSubject' => $rep ? (end($rep)['subject'] ?? null) : null, 'lastRepliedMessagePreview' => $rep ? $first(end($rep)) : null,
+                    'lastSentAt' => $snt ? end($snt)['createdAt'] : null, 'lastSentSubject' => $snt ? (end($snt)['subject'] ?? null) : null, 'lastSentMessagePreview' => $snt ? $first(end($snt)) : null,
+                    'isYourTurn' => str_ends_with(end($c['thread'])['type'], 'Replied')];
                 if (!$this->returnLabels) unset($row['labels']);
                 $data[] = $row;
             }
-            return $ok(['data' => $data, 'pagination' => ['totalItems' => count($data), 'currentPage' => 1, 'totalPages' => 1]]);
+            $per = max(1, (int) ($q['limit'] ?? 50));
+            $pg = max(1, (int) ($q['page'] ?? 1));
+            return $ok(['data' => array_slice($data, ($pg - 1) * $per, $per), 'pagination' => ['totalItems' => count($data), 'currentPage' => $pg, 'totalPages' => (int) ceil(count($data) / $per)]]);
+        }
+        if ($method === 'GET' && preg_match('~^/inbox/(ctc_[A-Za-z0-9]+)$~', $path, $m) && isset($this->rawThreads[$m[1]])) {
+            return $ok(['data' => $this->rawThreads[$m[1]], 'pagination' => ['totalItems' => count($this->rawThreads[$m[1]])]]);
         }
         if ($method === 'GET' && preg_match('~^/inbox/(ctc_[A-Za-z0-9]+)$~', $path, $m)) {
             if (!isset($this->inbox[$m[1]])) return $ok(['data' => [], 'pagination' => ['totalItems' => 0]]);
@@ -307,10 +325,11 @@ final class MockLemlist
         }
         if ($method === 'POST' && ($path === '/inbox/email' || $path === '/inbox/linkedin')) {
             $ctc = (string) ($b['contactId'] ?? '');
-            if (!isset($this->inbox[$ctc])) return $ok(['error' => 'Lead not found'], 400);
+            $inRaw = in_array($ctc, array_column($this->rawInbox ?? [], 'contactId'), true);
+            if (!isset($this->inbox[$ctc]) && !$inRaw) return $ok(['error' => 'Lead not found'], 400);
             if ($path === '/inbox/email' && ($b['sendUserMailboxId'] ?? '') !== 'usm_mockmailbox1') return $ok(['error' => 'Invalid sendUserMailboxId'], 400);
             $this->sent[] = ['channel' => $path === '/inbox/email' ? 'email' : 'linkedin', 'contactId' => $ctc];
-            $this->inbox[$ctc]['thread'][] = ['_id' => 'act_r' . substr(md5((string) count($this->sent)), 0, 10), 'type' => $path === '/inbox/email' ? 'emailsSent' : 'linkedinSent',
+            if (isset($this->inbox[$ctc])) $this->inbox[$ctc]['thread'][] = ['_id' => 'act_r' . substr(md5((string) count($this->sent)), 0, 10), 'type' => $path === '/inbox/email' ? 'emailsSent' : 'linkedinSent',
                 'createdAt' => gmdate('Y-m-d\TH:i:s.000\Z'), 'message' => (string) $b['message'], 'sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins'];
             return $ok(['ok' => true, 'contactId' => $ctc]);
         }

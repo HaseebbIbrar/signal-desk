@@ -234,7 +234,7 @@ final class App
                     'outreach/lead' => $this->outreach()->lead(self::str($_GET['id'] ?? '', 64)),
                     'outreach/compare' => $this->outreach()->compare($this->outreachIds(), self::str($_GET['p'] ?? '7', 8)),
                     'calls' => $this->calls($user['email'])->view(),
-                    'calls/inbox' => $this->calls($user['email'])->inbox(self::str($_GET['filter'] ?? 'all', 20)),
+                    'calls/inbox' => $this->calls($user['email'])->inbox(self::str($_GET['filter'] ?? 'needs', 20)),
                     'calls/thread' => $this->calls($user['email'])->thread(self::str($_GET['contactId'] ?? '', 64)),
                     'calls/updates' => $this->calls($user['email'])->updates(),
                     'inbox/unread' => $this->calls($user['email'])->unread(),

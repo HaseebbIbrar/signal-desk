@@ -647,21 +647,41 @@ final class CallDesk
         return mb_strlen($t) > 90 ? rtrim(mb_substr($t, 0, 89)) . '…' : $t;
     }
 
-    /** The newest of: lemlist's own previews of the last reply / last sent message, and the line cached from the webhook or an opened thread. */
-    private function snippetOf(string $contactId, array $c): string
+    /** The lead's last reply: lemlist's preview (lastRepliedMessagePreview) or, when as new, the fuller line cached from the webhook / an opened thread. */
+    private function replySnippet(string $contactId, array $c): string
     {
         $cands = [];
-        $last = is_array($c['messages'] ?? null) && $c['messages'] ? end($c['messages']) : null;
-        if (is_array($last)) $cands[] = [(string) ($last['body'] ?? $last['message'] ?? ''), (string) ($last['sentAt'] ?? $last['createdAt'] ?? ''), 2];
-        foreach ([['lastRepliedMessagePreview', 'lastRepliedAt', ''], ['lastSentMessagePreview', 'lastSentAt', 'You: '], ['lastMessagePreview', 'lastActivityAt', '']] as [$k, $at, $pre]) {
-            if (is_string($c[$k] ?? null) && trim($c[$k]) !== '') $cands[] = [$pre . $c[$k], (string) ($c[$at] ?? ''), 1];
-        }
+        if (is_string($c['lastRepliedMessagePreview'] ?? null) && trim($c['lastRepliedMessagePreview']) !== '') $cands[] = [$c['lastRepliedMessagePreview'], (string) ($c['lastRepliedAt'] ?? '')];
         $cached = $this->store->all('SELECT text, at FROM snippets WHERE contact_id = ?', [$contactId])[0] ?? null;
-        if ($cached) $cands[] = [(string) $cached['text'], (string) $cached['at'], 3]; // same moment: the cached line is the fuller one
-        $cands = array_filter($cands, fn ($x) => trim($x[0]) !== '');
+        if ($cached && !str_starts_with((string) $cached['text'], 'You: ') && trim((string) $cached['text']) !== '') $cands[] = [(string) $cached['text'], (string) $cached['at']];
         if (!$cands) return '';
-        usort($cands, fn ($a, $b) => [self::ts($b[1]), $b[2]] <=> [self::ts($a[1]), $a[2]]);
+        // the newest reply; the same reply in both: the fuller text (lemlist's preview is often just "Hi Jonathan,")
+        usort($cands, fn ($a, $b) => [self::ts($b[1]), mb_strlen(self::plain($b[0]))] <=> [self::ts($a[1]), mb_strlen(self::plain($a[0]))]);
         return self::snippet(reset($cands)[0]);
+    }
+
+    /** Incoming (the lead wrote) or outgoing (us), by activity type: *Replied = incoming; *Sent / *Done = outgoing; otherwise who sent it. */
+    public static function isOutgoing(array $m): bool
+    {
+        $type = (string) ($m['type'] ?? '');
+        if (preg_match('/^(emails|linkedin|whatsapp|sms|aircall)Replied$|^(emails|linkedin)(Interested|NotInterested)$/i', $type)) return false;
+        if (preg_match('/(Sent|Done)$/', $type)) return true;
+        return !empty($m['sendUserId']) || !empty($m['sendUserEmail']);
+    }
+
+    private static function channelOf(string $type): string
+    {
+        return match (true) {
+            str_starts_with($type, 'linkedin') => 'LinkedIn', str_starts_with($type, 'whatsapp') => 'WhatsApp', str_starts_with($type, 'sms') => 'SMS', default => 'Email',
+        };
+    }
+
+    /** Conversations we answered from Signal Desk: out of "Needs reply" at once, until the lead writes again (lemlist catches up on its own). */
+    public const REPLIED_FILE = 'inbox-replied.json';
+
+    private function repliedHere(): array
+    {
+        return JsonStore::read($this->store->dir . '/' . self::REPLIED_FILE, []) ?: [];
     }
 
     private static function ts(string $iso): int
@@ -669,18 +689,32 @@ final class CallDesk
         return $iso !== '' ? (int) strtotime($iso) : 0;
     }
 
-    /** Conversations (live from lemlist, nothing stored) with lead, campaign, channel, unread and labels. */
-    public function inbox(string $filter = 'all'): array
+    public const FILTERS = ['needs', 'all', 'unread', 'Interested', 'Meeting'];
+
+    /**
+     * Conversations with a reply from the lead (live from lemlist, nothing stored), newest reply first:
+     * the lead's last reply as the snippet, "You: …" when we wrote after it, "your turn" (isYourTurn), unread, labels.
+     * Sent-only conversations (no reply at all) are left out: they belong to the Dashboard's lead board.
+     */
+    public function inbox(string $filter = 'needs'): array
     {
         $sender = $this->sender() ?? ['userId' => (string) ($this->config['LEMLIST_SHARED_SENDER'] ?? '')];
         $client = $this->clientOrFail();
-        $r = $client->get('/inbox', ['userId' => $sender['userId'], 'page' => 1, 'limit' => 50]);
+        $rows = [];
+        for ($page = 1; $page <= 4; $page++) {
+            $r = $client->get('/inbox', ['userId' => $sender['userId'], 'page' => $page, 'limit' => 50]);
+            $data = $r['data'] ?? $r['conversations'] ?? [];
+            array_push($rows, ...(is_array($data) ? $data : []));
+            if (count($data) < 50 || $page >= (int) ($r['pagination']['totalPages'] ?? $page)) break;
+        }
         $labels = $this->labels(false);
         $names = array_column($this->store->all('SELECT id, name FROM campaigns'), 'name', 'id');
+        $replied = $this->repliedHere();
         $out = [];
-        foreach ($r['data'] ?? [] as $c) {
+        foreach ($rows as $c) {
             $cid = (string) ($c['contactId'] ?? '');
-            if ($cid === '') continue;
+            $repliedAt = (string) ($c['lastRepliedAt'] ?? '');
+            if ($cid === '' || $repliedAt === '') continue; // sent-only: no reply from the lead
             $leads = $this->leadsFor($cid, self::convHints($c));
             $lead = $leads[0] ?? null;
             $unread = false;
@@ -692,6 +726,11 @@ final class CallDesk
             if ($lead && $ourLabel !== null && isset(self::OUR_LABEL_OUTCOME[$ourLabel]) && !$this->store->one('SELECT 1 FROM outcomes WHERE lead_id = ?', [$lead['lead_id']])) {
                 $this->setOutcome((string) $lead['lead_id'], self::OUR_LABEL_OUTCOME[$ourLabel]); // a label set in lemlist counts in Outreach too
             }
+            $sentAt = (string) ($c['lastSentAt'] ?? '');
+            // our turn: lemlist's isYourTurn (else: the lead wrote last), unless we answered here after their last reply
+            $yourTurn = array_key_exists('isYourTurn', $c) ? (bool) $c['isYourTurn'] : self::ts($repliedAt) > self::ts($sentAt);
+            if ($yourTurn && isset($replied[$cid]) && (int) $replied[$cid] >= self::ts($repliedAt)) $yourTurn = false;
+            $weWroteAfter = $sentAt !== '' && self::ts($sentAt) > self::ts($repliedAt) && is_string($c['lastSentMessagePreview'] ?? null) && trim($c['lastSentMessagePreview']) !== '';
             $channel = (string) ($c['lastRepliedChannel'] ?? ($c['channels'][0] ?? 'email'));
             $contact = is_array($c['contact'] ?? null) ? $c['contact'] : [];
             $name = trim((string) ($c['contactName'] ?? $contact['fullName'] ?? trim(($contact['firstName'] ?? '') . ' ' . ($contact['lastName'] ?? ''))))
@@ -700,18 +739,23 @@ final class CallDesk
                 'company' => $lead['company'] ?? (string) ($c['contactCompanyName'] ?? $contact['companyName'] ?? ''),
                 'campaign' => $lead ? ($names[$lead['campaign_id']] ?? '') : '', 'more' => max(0, count(array_unique(array_column($leads, 'campaign_id'))) - 1),
                 'signal' => self::signalOf($lead), 'inCampaign' => $lead !== null, 'canLinkedin' => $lead !== null,
-                'channel' => str_contains($channel, 'linkedin') ? 'linkedin' : 'email', 'unread' => $unread, 'at' => (string) ($c['lastActivityAt'] ?? $c['lastRepliedAt'] ?? ''),
-                'label' => $ourLabel, 'labelsKnown' => $ids !== null, 'snippet' => $this->snippetOf($cid, $c)];
+                'channel' => str_contains($channel, 'linkedin') ? 'linkedin' : (str_contains($channel, 'whatsapp') ? 'whatsapp' : (str_contains($channel, 'sms') ? 'sms' : 'email')),
+                'unread' => $unread, 'yourTurn' => $yourTurn, 'at' => $repliedAt, 'sentAt' => $sentAt ?: null,
+                'label' => $ourLabel, 'labelsKnown' => $ids !== null, 'snippet' => $this->replySnippet($cid, $c),
+                'youWrote' => $weWroteAfter ? self::snippet((string) $c['lastSentMessagePreview']) : null];
         }
-        usort($out, fn ($a, $b) => strcmp($b['at'], $a['at']));
-        $unread = count(array_filter($out, fn ($c) => $c['unread']));
+        usort($out, fn ($a, $b) => [self::ts($b['at']), $b['contactId']] <=> [self::ts($a['at']), $a['contactId']]); // newest reply first
+        $counts = ['needs' => count(array_filter($out, fn ($c) => $c['yourTurn'])), 'unread' => count(array_filter($out, fn ($c) => $c['unread'])),
+            'badge' => count(array_filter($out, fn ($c) => $c['yourTurn'] || $c['unread']))];
         try {
-            JsonStore::write($this->store->dir . '/' . self::UNREAD_FILE, ['count' => $unread, 'at' => ($this->now)()]); // the Inbox badge on every page
+            JsonStore::write($this->store->dir . '/' . self::UNREAD_FILE, ['count' => $counts['badge'], 'needs' => $counts['needs'], 'unread' => $counts['unread'], 'at' => ($this->now)()]); // the Inbox badge on every page
         } catch (\Throwable) {
         }
-        if ($filter === 'unread') $out = array_values(array_filter($out, fn ($c) => $c['unread']));
+        if (!in_array($filter, self::FILTERS, true)) $filter = 'needs';
+        if ($filter === 'needs') $out = array_values(array_filter($out, fn ($c) => $c['yourTurn']));
+        elseif ($filter === 'unread') $out = array_values(array_filter($out, fn ($c) => $c['unread']));
         elseif (in_array($filter, ['Interested', 'Meeting'], true)) $out = array_values(array_filter($out, fn ($c) => $c['label'] === $filter));
-        return ['conversations' => $out, 'unread' => $unread, 'labels' => array_keys($labels['ours'])];
+        return ['conversations' => $out, 'filter' => $filter, 'unread' => $counts['unread'], 'needs' => $counts['needs'], 'badge' => $counts['badge'], 'labels' => array_keys($labels['ours'])];
     }
 
     /** One thread. Marks it read in lemlist only when writes are on (it changes lemlist state). */
@@ -727,15 +771,17 @@ final class CallDesk
         $lead = $leads[0] ?? null;
         $msgs = [];
         foreach ($r['data'] ?? [] as $m) {
+            if (!is_array($m)) continue;
             $type = (string) ($m['type'] ?? '');
-            $out = preg_match('/Sent$|Done$/', $type) === 1 || (!empty($m['sendUserId']) && !preg_match('/Replied$/', $type));
-            $msgs[] = ['out' => $out, 'channel' => str_starts_with($type, 'linkedin') ? 'LinkedIn' : 'Email', 'at' => (string) ($m['createdAt'] ?? $m['sentAt'] ?? ''),
+            $out = self::isOutgoing($m);
+            $msgs[] = ['out' => $out, 'type' => $type, 'channel' => self::channelOf($type), 'at' => (string) ($m['createdAt'] ?? $m['sentAt'] ?? ''),
                 'who' => $out ? (string) ($m['sendUserName'] ?? 'You') : ($lead ? trim($lead['first_name'] . ' ' . $lead['last_name']) : 'Contact'),
                 'subject' => isset($m['subject']) ? (string) $m['subject'] : null, 'text' => self::plain((string) ($m['message'] ?? $m['body'] ?? ''))];
         }
         usort($msgs, fn ($a, $b) => strcmp($a['at'], $b['at']));
-        $lastMsg = end($msgs);
-        if ($lastMsg && $lastMsg['text'] !== '') $this->store->setSnippet($contactId, ($lastMsg['out'] ? 'You: ' : '') . self::snippet($lastMsg['text']), $lastMsg['at'], ($this->now)());
+        $lastIn = null;
+        foreach ($msgs as $m) if (!$m['out'] && $m['text'] !== '') $lastIn = $m;
+        if ($lastIn) $this->store->setSnippet($contactId, self::snippet($lastIn['text']), $lastIn['at'], ($this->now)()); // the list shows the lead's last reply
         $names = array_column($this->store->all('SELECT id, name FROM campaigns'), 'name', 'id');
         return ['contactId' => $contactId, 'leadId' => $lead['lead_id'] ?? null,
             'name' => $lead ? trim($lead['first_name'] . ' ' . $lead['last_name']) : '', 'jobTitle' => $lead['title'] ?? '', 'company' => $lead['company'] ?? '',
@@ -771,6 +817,16 @@ final class CallDesk
         $this->limiter->hit($this->user, 'send');
         $this->clientOrFail()->write(...$req);
         $this->audit('reply', $ids, 'ok');
+        try {
+            $now = ($this->now)();
+            JsonStore::update($this->store->dir . '/' . self::REPLIED_FILE, [], function ($d) use ($contactId, $now) {
+                $d = array_filter(is_array($d) ? $d : [], fn ($t) => (int) $t > $now - 30 * 86400); // ids and times only, 30 days
+                $d[$contactId] = $now;
+                return $d;
+            });
+            @unlink($this->store->dir . '/' . self::UNREAD_FILE); // the Inbox badge is counted again on the next page
+        } catch (\Throwable) {
+        }
         return ['ok' => true, 'message' => 'Sent through lemlist.'];
     }
 
@@ -831,14 +887,14 @@ final class CallDesk
     public const UNREAD_FILE = 'inbox-unread.json';
     public const UNREAD_TTL = 120;
 
-    /** Unread conversations as last counted (no lemlist request), null before the first count. */
+    /** The Inbox badge as last counted (conversations where it's our turn, plus unread; no lemlist request), null before the first count. */
     public static function cachedUnread(string $dir): ?int
     {
         $c = JsonStore::read("$dir/" . self::UNREAD_FILE, null);
         return is_array($c) && isset($c['count']) ? (int) $c['count'] : null;
     }
 
-    /** The Inbox badge: re-counted from lemlist at most every 2 minutes, or at once after a reply webhook. */
+    /** The Inbox badge (our turn + unread): re-counted from lemlist at most every 2 minutes, at once after a reply webhook or a reply sent here. */
     public function unread(): array
     {
         $file = $this->store->dir . '/' . self::UNREAD_FILE;
@@ -848,7 +904,7 @@ final class CallDesk
             $this->inbox('all');
             $c = JsonStore::read($file, []) ?: [];
         }
-        return ['unread' => (int) ($c['count'] ?? 0), 'at' => (int) ($c['at'] ?? 0)];
+        return ['badge' => (int) ($c['count'] ?? 0), 'needs' => (int) ($c['needs'] ?? 0), 'unread' => (int) ($c['unread'] ?? 0), 'at' => (int) ($c['at'] ?? 0)];
     }
 
     /** Cheap poll (local database only): when did the webhook last bring news? */
