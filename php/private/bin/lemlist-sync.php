@@ -24,6 +24,8 @@ $privateDir = dirname(__DIR__);
 require $privateDir . '/src/bootstrap.php';
 
 use SignalDesk\Audit;
+use SignalDesk\CallDesk;
+use SignalDesk\CallDeskLimiter;
 use SignalDesk\Config;
 use SignalDesk\HookBuffer;
 use SignalDesk\Lemlist;
@@ -61,6 +63,14 @@ try {
         if ($r['result'] === 'done' && !isset($opts['no-link'])) {
             $l = LemlistLinker::run($store, Lemlist::tabReader(Config::backend($config)), Lemlist::atlasCounter($config, $privateDir));
             $line .= sprintf(' linked=%d (IT %d, HR %d)', $l['linked'], $l['it'], $l['hr']);
+            try { // Inbox: each conversation's campaign, from its activities (only conversations not known yet are read), and the unread badge
+                $i = (new CallDesk($store, $client, $config, 'cron', new CallDeskLimiter($config['STORAGE_DIR'] . '/lemlist-limits.json')))->inbox('all', '', 1, 500, 100);
+                $line .= sprintf(' inbox: conversations=%d unread=%d', $i['total'], $i['unread']);
+            } catch (\PDOException $e) {
+                throw $e;
+            } catch (\Throwable $e) {
+                $line .= ' inbox: ' . $e->getMessage();
+            }
             $atlas = Atlas::source($config, $privateDir);
             if ($atlas) { // Atlas new jobs / deals / placements for "From reach to business", hourly, read-only
                 try {

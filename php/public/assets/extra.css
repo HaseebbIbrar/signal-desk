@@ -530,7 +530,13 @@ button.sd-o-action:hover { background: #33224f; }
 .sd-k-vm-sum:focus-visible { outline: 2px solid var(--sd-link); outline-offset: 2px; }
 .sd-k-vm-body { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 12px; }
 .sd-k-preview-call { border-left: 3px solid var(--sd-call); font-size: 14px; }
-/* inbox: the lead's reply first, our later message as a quiet second line, "Your turn" */
-.sd-k-in { color: var(--sd-signal); }
-.sd-k-youwrote { font-size: 12px; color: var(--sd-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sd-k-turn { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: var(--sd-accent); color: #fff; font-weight: 600; }
+/* inbox (mirrors lemlist): search, "You:" on our own last message, email subject, attachments, full-email toggle, load more */
+.sd-k-isearch { box-sizing: border-box; width: 100%; min-height: 44px; margin: 10px 0; padding: 0 14px; border-radius: 999px; border: 1px solid var(--sd-control-border);
+  background: var(--sd-deep); color: var(--sd-text); font: inherit; font-size: 14px; }
+.sd-k-isearch:focus-visible { outline: 2px solid var(--sd-link); outline-offset: 2px; }
+.sd-k-you { color: var(--sd-muted); }
+.sd-k-subject { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.sd-k-files { display: block; margin-top: 6px; font-size: 12px; color: var(--sd-muted); }
+.sd-k-fulltoggle { margin-top: 6px; padding: 0; min-height: 32px; border: 0; background: transparent; color: var(--sd-link); font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; }
+.sd-k-more { display: flex; justify-content: center; padding: 12px; }
+

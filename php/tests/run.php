@@ -14,7 +14,11 @@ require __DIR__ . '/../private/src/bootstrap.php';
 use SignalDesk\Audit;
 
 $GLOBALS['__tests'] = [];
-function test(string $name, callable $fn): void { $GLOBALS['__tests'][] = [$name, $fn]; }
+function test(string $name, callable $fn): void
+{
+    $only = (string) getenv('TEST_FILTER'); // e.g. TEST_FILTER=inbox php tests/run.php
+    if ($only === '' || stripos($name, $only) !== false) $GLOBALS['__tests'][] = [$name, $fn];
+}
 
 final class AssertionFailed extends \Exception {}
 function fail(string $m): never { throw new AssertionFailed($m); }

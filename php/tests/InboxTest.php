@@ -1,114 +1,201 @@
 <?php
-// Inbox with fixtures shaped like the real lemlist API (GET /inbox rows: lastReplied* and lastSent* fields, isYourTurn;
-// GET /inbox/{contactId}: activities by type). Names are fictional. Checks: snippet = the lead's reply, sort by reply time,
-// the "Needs reply" filter (default), sent-only hidden, the badge, thread directions, and leaving "Needs reply" after a reply here.
+// The Inbox mirrors the lemlist inbox (25 Nov 2026). Fixtures shaped like the real API (GET /inbox rows with lastReplied* / lastSent*;
+// GET /inbox/{contactId} activities newest first, paged with skip + limit, campaignId + leadId on each; LinkedIn text in `message`
+// or `text`), names fictional. Checks: list order and paging, "You:" previews, search, label filters, the unread badge, read / unread,
+// full threads for every channel with "Load older", email trimming + full text, subjects and attachments, the campaign of a conversation.
 declare(strict_types=1);
 
 use SignalDesk\CallDesk;
 use SignalDesk\MockLemlist;
+use SignalDesk\ValidationError;
 
 /** One GET /inbox row as the real API returns it. */
-function t_ibx(string $ctc, string $name, ?string $repliedAt, ?string $replyPreview, ?string $sentAt, ?string $sentPreview, bool $yourTurn, string $channel = 'email', bool $read = true): array
+function t_ibx(string $ctc, string $name, ?string $repliedAt, ?string $replyPreview, ?string $sentAt, ?string $sentPreview, string $channel = 'email', bool $read = true, array $labels = []): array
 {
     return ['id' => 'ibx_' . substr($ctc, 4), 'contactId' => $ctc, 'contactName' => $name, 'contactEmail' => strtolower(str_replace(' ', '.', $name)) . '@fixture.example',
         'contactLinkedinUrl' => 'https://www.linkedin.com/in/' . strtolower(str_replace(' ', '-', $name)),
         'lastActivityAt' => max((string) $repliedAt, (string) $sentAt), 'lastRepliedAt' => $repliedAt, 'lastRepliedChannel' => $repliedAt ? $channel : null,
-        'lastRepliedSubject' => $repliedAt && $channel === 'email' ? 'Re: A permanent Data Engineer' : null, 'lastRepliedMessagePreview' => $replyPreview,
-        'lastSentAt' => $sentAt, 'lastSentSubject' => $sentAt ? 'Re: A permanent Data Engineer' : null, 'lastSentMessagePreview' => $sentPreview,
-        'channels' => ['email', 'linkedin'], 'isYourTurn' => $yourTurn, 'users' => [['userId' => MockLemlist::USER, 'read' => $read]], 'labels' => []];
+        'lastRepliedSubject' => null, 'lastRepliedMessagePreview' => $replyPreview, 'lastSentAt' => $sentAt, 'lastSentSubject' => null, 'lastSentMessagePreview' => $sentPreview,
+        'channels' => ['email', 'linkedin'], 'isYourTurn' => (string) $repliedAt > (string) $sentAt, 'users' => [['userId' => MockLemlist::USER, 'read' => $read]], 'labels' => $labels];
+}
+
+/** One raw activity of GET /inbox/{contactId}. */
+function t_act(string $id, string $type, string $at, string $text, string $field = 'message', array $extra = []): array
+{
+    return $extra + ['_id' => $id, 'type' => $type, 'createdAt' => $at, $field => $text, 'campaignId' => 'cam_it000001', 'leadId' => 'lea_fx01', 'contactId' => 'ctc_x',
+        'sendUserId' => MockLemlist::USER, 'sendUserName' => 'Jonathan Perkins', 'hasAttachments' => false, 'attachments' => []];
 }
 
 function t_inbox_fixture(MockLemlist $m): void
 {
+    $m->labels[] = ['_id' => 'lbl_notint001', 'name' => 'Not interested'];
+    $m->labels[] = ['_id' => 'lbl_ooo000001', 'name' => 'Out of office'];
     $m->rawInbox = [
-        // newest activity is OUR message, their reply is older: not our turn, "You: …" second line
-        t_ibx('ctc_fxOurLast01', 'Chris Fixture', '2026-11-21T06:56:29.034Z', 'Hi Jonathan, thanks for following up. There\'s no need to send additional profiles',
-            '2026-11-23T15:47:27.895Z', "Hi Chris,\n\nThanks for getting back to me, appreciate it!", false, 'linkedin'),
-        // they replied last: our turn
-        t_ibx('ctc_fxTheirTurn1', 'Carla Fixture', '2026-11-19T13:32:44.000Z', 'Jonathan,', '2026-11-19T08:11:45.263Z', 'Hi Carla,', true, 'email', false),
+        t_ibx('ctc_fxOurLast01', 'Chris Fixture', '2026-11-21T06:56:29.034Z', 'Hi Jonathan, there is no need to send more profiles', '2026-11-23T15:47:27.895Z', "Hi Chris,\n\nThanks for getting back to me!", 'linkedin'),
+        t_ibx('ctc_fxSentOnly1', 'Sam Fixture', null, null, '2026-11-22T16:00:00.000Z', 'Hi Sam,'),
+        t_ibx('ctc_fxTheirTurn1', 'Carla Fixture', '2026-11-19T13:32:44.000Z', 'Jonathan,', '2026-11-19T08:11:45.263Z', 'Hi Carla,', 'email', false),
         t_ibx('ctc_fxTheirTurn2', 'Bart Fixture', '2026-11-17T08:39:15.245Z', 'for now my team is complete so no openings in the foreseeable future',
-            '2026-11-17T08:37:34.345Z', 'Hey Bart - No problem, how do the headcount plans look for 2027?', true, 'linkedin'),
-        // sent only: no reply at all (lemlist list "sentOnly") — newest activity of all, still not in the Inbox
-        t_ibx('ctc_fxSentOnly1', 'Sam Fixture', null, null, '2026-11-23T16:00:00.000Z', 'Hi Sam,', false),
-        // not our turn but unread: counts in the badge
-        t_ibx('ctc_fxUnread001', 'Uma Fixture', '2026-11-10T09:00:00.000Z', 'Thanks, will forward internally.', '2026-11-12T09:00:00.000Z', 'Great, speak soon.', false, 'email', false),
+            '2026-11-17T08:37:34.345Z', 'Hey Bart - No problem, how do the headcount plans look for 2027?', 'linkedin', true, ['lbl_notint001']),
+        t_ibx('ctc_fxOoo000001', 'Otto Fixture', '2026-11-10T09:00:00.000Z', 'I am out of the office until Monday', '2026-11-09T09:00:00.000Z', 'Hi Otto,', 'email', false, ['lbl_ooo000001']),
     ];
 }
 
-test('inbox (real API shape): snippet = the lead\'s last reply with its channel and time; "You: …" only when we wrote after it; sorted by reply time; sent-only hidden', function () {
+test('inbox list (real API shape): all conversations in lemlist\'s order, latest activity first, sent-only too; the last message\'s preview with "You:" when ours', function () {
     $m = new MockLemlist();
     t_inbox_fixture($m);
     [$d] = t_desk([], 'jp@x.test', $m);
-    $all = $d->inbox('all');
-    eq(['ctc_fxOurLast01', 'ctc_fxTheirTurn1', 'ctc_fxTheirTurn2', 'ctc_fxUnread001'], array_column($all['conversations'], 'contactId'), 'newest reply first, not newest activity; no sent-only');
-    $by = array_column($all['conversations'], null, 'contactId');
-    $chris = $by['ctc_fxOurLast01'];
-    eq(['Hi Jonathan, thanks for following up. There\'s no need to send additional profiles', 'linkedin', '2026-11-21T06:56:29.034Z', false],
-        [$chris['snippet'], $chris['channel'], $chris['at'], $chris['yourTurn']], 'their reply, not our later message');
-    eq('Hi Chris, Thanks for getting back to me, appreciate it!', $chris['youWrote'], 'our later message as the quiet second line');
-    $bart = $by['ctc_fxTheirTurn2'];
-    eq(['for now my team is complete so no openings in the foreseeable future', null, true], [$bart['snippet'], $bart['youWrote'], $bart['yourTurn']], 'they wrote last: no "You:" line');
-    ok(!in_array('ctc_fxSentOnly1', array_column($all['conversations'], 'contactId'), true), 'sent-only conversations are left out');
-    foreach ($all['conversations'] as $c) ok(!str_starts_with((string) $c['snippet'], 'Hi Chris') && !str_starts_with((string) $c['snippet'], 'Hi Carla'), 'never our own message as the snippet');
-});
-
-test('inbox (real API shape): "Needs reply" (isYourTurn) is the default view; All / Unread / Interested / Meeting kept; badge = our turn + unread', function () {
-    $m = new MockLemlist();
-    t_inbox_fixture($m);
-    [$d, $store] = t_desk([], 'jp@x.test', $m);
-    $def = $d->inbox();
-    eq(['needs', ['ctc_fxTheirTurn1', 'ctc_fxTheirTurn2']], [$def['filter'], array_column($def['conversations'], 'contactId')], 'default: our turn only, newest reply first');
-    eq([2, 2, 3], [$def['needs'], $def['unread'], $def['badge']], 'badge: Carla + Bart (our turn) + Uma (unread); Carla is both and counts once');
-    eq(['ctc_fxTheirTurn1', 'ctc_fxUnread001'], array_column($d->inbox('unread')['conversations'], 'contactId'));
-    eq(4, count($d->inbox('all')['conversations']));
-    eq([], $d->inbox('Interested')['conversations']);
-    eq('needs', $d->inbox('bogus')['filter'], 'unknown filter: the default');
-    eq(3, CallDesk::cachedUnread($store->dir), 'the top-bar Inbox badge');
+    $i = $d->inbox();
+    eq(['ctc_fxOurLast01', 'ctc_fxSentOnly1', 'ctc_fxTheirTurn1', 'ctc_fxTheirTurn2', 'ctc_fxOoo000001'], array_column($i['conversations'], 'contactId'));
+    $by = array_column($i['conversations'], null, 'contactId');
+    eq(['Hi Chris, Thanks for getting back to me!', true, '2026-11-23T15:47:27.895Z'], [$by['ctc_fxOurLast01']['snippet'], $by['ctc_fxOurLast01']['ours'], $by['ctc_fxOurLast01']['at']], 'our message is the last one');
+    eq(['Hi Sam,', true], [$by['ctc_fxSentOnly1']['snippet'], $by['ctc_fxSentOnly1']['ours']], 'sent-only, as in lemlist');
+    eq(['for now my team is complete so no openings in the foreseeable future', false, 'linkedin'], [$by['ctc_fxTheirTurn2']['snippet'], $by['ctc_fxTheirTurn2']['ours'], $by['ctc_fxTheirTurn2']['channel']]);
+    eq([['Not interested'], 'Not interested'], [$by['ctc_fxTheirTurn2']['labels'], $by['ctc_fxTheirTurn2']['label']]);
     $js = (string) file_get_contents(__DIR__ . '/../public/assets/app.js');
-    ok(str_contains($js, 'inbox: { filter: "needs"') && str_contains($js, '[["needs", "Needs reply"], ["all", "All"], ["unread", "Unread"], ["Interested", "Interested"], ["Meeting", "Meeting"]]'), 'Needs reply first and default');
-    ok(str_contains($js, '"Your turn"') && str_contains($js, 'text: "↩ "') && str_contains($js, '"You: " + c.youWrote'), 'list row: ↩ reply, Your turn badge, You: line');
+    ok(str_contains($js, 'c.ours ? h("span", { class: "sd-k-you", text: "You: " })') && !str_contains($js, '"Needs reply"') && !str_contains($js, '"Your turn"') && !str_contains($js, 'Done, no reply needed'),
+        'no Needs reply / Your turn / Done any more');
 });
 
-test('inbox thread (real API shape): *Replied = incoming (left), *Sent = outgoing (right), even when a reply carries the sender id', function () {
+test('inbox filters, search and paging: All · Unread · Interested · Meeting · Not interested · Out of office; name, email or company; 25 at a time with Load more', function () {
     $m = new MockLemlist();
     t_inbox_fixture($m);
-    $m->rawThreads['ctc_fxTheirTurn2'] = [
-        ['id' => 'act_fx6', 'type' => 'linkedinReplied', 'createdAt' => '2026-11-17T08:39:15.245Z', 'subject' => null, 'message' => 'for now my team is complete', 'leadId' => 'lea_fx01', 'sendUserId' => MockLemlist::USER],
-        ['id' => 'act_fx5', 'type' => 'linkedinSent', 'createdAt' => '2026-11-17T08:37:34.345Z', 'subject' => null, 'message' => 'Hey Bart - No problem', 'leadId' => 'lea_fx01'],
-        ['id' => 'act_fx4', 'type' => 'emailsReplied', 'createdAt' => '2026-11-14T10:00:00.000Z', 'subject' => 'Re: x', 'message' => '<p>Thanks for reaching out.</p>', 'leadId' => 'lea_fx01', 'sendUserEmail' => 'jonathan@swooscale.com'],
-        ['id' => 'act_fx3', 'type' => 'whatsappReplied', 'createdAt' => '2026-11-13T10:00:00.000Z', 'message' => 'ok'],
-        ['id' => 'act_fx2', 'type' => 'smsReplied', 'createdAt' => '2026-11-12T10:00:00.000Z', 'message' => 'call me'],
-        ['id' => 'act_fx1', 'type' => 'emailsSent', 'createdAt' => '2026-11-11T08:10:59.304Z', 'subject' => 'A permanent Data Engineer', 'message' => '<p>Hi Bart,</p>', 'leadId' => 'lea_fx01'],
-    ];
-    [$d] = t_desk([], 'jp@x.test', $m);
-    $t = $d->thread('ctc_fxTheirTurn2');
-    eq(['emailsSent', 'smsReplied', 'whatsappReplied', 'emailsReplied', 'linkedinSent', 'linkedinReplied'], array_column($t['messages'], 'type'), 'oldest first');
-    eq([true, false, false, false, true, false], array_column($t['messages'], 'out'));
-    eq(['Email', 'SMS', 'WhatsApp', 'Email', 'LinkedIn', 'LinkedIn'], array_column($t['messages'], 'channel'));
-    foreach (['emailsReplied', 'linkedinReplied', 'whatsappReplied', 'smsReplied'] as $type) eq(false, CallDesk::isOutgoing(['type' => $type, 'sendUserId' => 'usr_x']), "$type is incoming");
-    foreach (['emailsSent', 'linkedinSent', 'linkedinInviteDone'] as $type) eq(true, CallDesk::isOutgoing(['type' => $type]), "$type is outgoing");
-    // opening it caches the lead's last reply (not our message) for the list
-    eq('for now my team is complete so no openings in the foreseeable future', array_column($d->inbox('all')['conversations'], null, 'contactId')['ctc_fxTheirTurn2']['snippet'],
-        'lemlist\'s preview is longer here, and as new: kept');
+    [$d, , $mock] = t_desk([], 'jp@x.test', $m);
+    eq(['ctc_fxTheirTurn1', 'ctc_fxOoo000001'], array_column($d->inbox('unread')['conversations'], 'contactId'));
+    eq(['ctc_fxTheirTurn2'], array_column($d->inbox('Not interested')['conversations'], 'contactId'));
+    eq(['ctc_fxOoo000001'], array_column($d->inbox('Out of office')['conversations'], 'contactId'));
+    eq([], $d->inbox('Meeting')['conversations']);
+    eq('all', $d->inbox('needs')['filter'], 'the old filters are gone');
+    eq(['ctc_fxTheirTurn1'], array_column($d->inbox('all', 'carla')['conversations'], 'contactId'), 'by name');
+    eq(['ctc_fxTheirTurn2'], array_column($d->inbox('all', 'bart.fixture@')['conversations'], 'contactId'), 'by email');
+    $p1 = $d->inbox('all', '', 1, 2);
+    eq([['ctc_fxOurLast01', 'ctc_fxSentOnly1'], 5, true], [array_column($p1['conversations'], 'contactId'), $p1['total'], $p1['hasMore']]);
+    $p3 = $d->inbox('all', '', 3, 2);
+    eq([['ctc_fxOoo000001'], false], [array_column($p3['conversations'], 'contactId'), $p3['hasMore']]);
+    // 120 conversations: every lemlist page of 50 is read
+    $mock->rawInbox = [];
+    for ($i = 0; $i < 120; $i++) $mock->rawInbox[] = t_ibx(sprintf('ctc_fxMany%05d', $i), "Lead $i", null, null, sprintf('2026-11-%02dT%02d:00:00.000Z', 20 - intdiv($i, 24), 23 - $i % 24), 'Hi,');
+    $from = count($mock->calls);
+    $all = $d->inbox('all', '', 5, 25);
+    eq([120, false, 20, 'ctc_fxMany00100'], [$all['total'], $all['hasMore'], count($all['conversations']), $all['conversations'][0]['contactId']]);
+    eq([1, 2, 3], array_map('intval', array_column(array_column(array_values(array_filter(array_slice($mock->calls, $from), fn ($c) => $c[1] === '/inbox')), 2), 'page')));
 });
 
-test('inbox: a reply sent from Signal Desk takes the conversation out of "Needs reply" at once, until the lead writes again', function () {
+test('inbox badge = unread conversations (as lemlist); opening marks read; "Mark as unread" is kept here (lemlist has no API for it) until opened again', function () {
     $m = new MockLemlist();
     t_inbox_fixture($m);
     [$d, $store, $mock] = t_desk([], 'jp@x.test', $m);
-    $d->now = fn () => strtotime('2026-11-23T17:00:00Z');
-    eq(true, $d->reply(['contactId' => 'ctc_fxTheirTurn1', 'channel' => 'email', 'message' => 'Thanks Carla, Tuesday works.', 'confirm' => true])['ok']);
-    ok(!is_file($store->dir . '/' . CallDesk::UNREAD_FILE), 'the badge is counted again');
-    $def = $d->inbox(); // lemlist still says isYourTurn: true (not caught up yet)
-    eq(['ctc_fxTheirTurn2'], array_column($def['conversations'], 'contactId'));
-    eq([1, 3], [$def['needs'], $def['badge']], 'Carla left Needs reply; she is still unread, so the badge stays 3 (Carla unread, Bart our turn, Uma unread)');
-    $raw = (string) file_get_contents($store->dir . '/' . CallDesk::REPLIED_FILE);
-    ok(str_contains($raw, 'ctc_fxTheirTurn1') && !str_contains($raw, 'Tuesday'), 'ids and times only');
-    // Carla writes again: back in Needs reply
-    $mock->rawInbox[1]['lastRepliedAt'] = '2026-11-23T18:00:00.000Z';
-    $mock->rawInbox[1]['lastRepliedMessagePreview'] = 'One more question';
-    $d->now = fn () => strtotime('2026-11-23T18:05:00Z');
-    eq(['ctc_fxTheirTurn1', 'ctc_fxTheirTurn2'], array_column($d->inbox()['conversations'], 'contactId'));
+    eq(2, $d->inbox()['unread']);
+    eq(2, CallDesk::cachedUnread($store->dir));
+    eq(2, $d->unread()['badge']);
+    $writes = count(array_filter($mock->calls, fn ($c) => $c[0] !== 'GET'));
+    $GLOBALS['__events'] = [];
+    eq(true, $d->markUnread(['contactId' => 'ctc_fxOurLast01'])['unread']);
+    eq($writes, count(array_filter($mock->calls, fn ($c) => $c[0] !== 'GET')), 'nothing sent to lemlist');
+    ok(str_contains(json_encode($GLOBALS['__events']), '"action":"inbox_unread","contactId":"ctc_fxOurLast01"'), 'audited (ids only)');
+    $i = $d->inbox();
+    eq([3, true], [$i['unread'], array_column($i['conversations'], null, 'contactId')['ctc_fxOurLast01']['unread']]);
+    eq(3, CallDesk::cachedUnread($store->dir), 'the top-bar badge follows');
+    $mock->rawThreads['ctc_fxOurLast01'] = [t_act('act_c1', 'linkedinReplied', '2026-11-21T06:56:29.034Z', 'Hi Jonathan', 'text')];
+    $t = $d->thread('ctc_fxOurLast01');
+    eq(true, $t['markedRead'], 'opening marks it read in lemlist (markAsRead)');
+    eq('true', end($mock->calls)[2]['markAsRead'] ?? null);
+    eq(2, $d->inbox()['unread'], 'opened again: our "unread" mark is gone');
+    throws(fn () => $d->markUnread(['contactId' => 'x']), ValidationError::class);
+    // writes off (preview mode): reading does not change lemlist
+    $m2 = new MockLemlist();
+    t_inbox_fixture($m2);
+    $m2->rawThreads['ctc_fxTheirTurn1'] = [t_act('act_x', 'emailsReplied', '2026-11-19T13:32:44.000Z', '<p>Jonathan,</p>')];
+    [$d2] = t_desk(['LEMLIST_WRITES' => 'off'], 'jp@x.test', $m2);
+    eq(false, $d2->thread('ctc_fxTheirTurn1')['markedRead']);
+});
+
+test('inbox thread: every message of every channel with its text (LinkedIn in `message` or `text`, WhatsApp, SMS), oldest at the top, line breaks kept', function () {
+    $m = new MockLemlist();
+    t_inbox_fixture($m);
+    $m->rawThreads['ctc_fxTheirTurn2'] = [ // newest first, as lemlist returns them
+        t_act('act_bcoHPcCYHMdC1', 'linkedinReplied', '2026-11-17T08:39:15.245Z', 'for now my team is complete so no openings in the foreseeable future'),
+        t_act('act_irSXLYFskrop1', 'linkedinSent', '2026-11-17T08:37:34.345Z', 'Hey Bart - No problem, how do the headcount plans look for the rest of the year and 2027?', 'text'),
+        t_act('act_nLN9ddDiEzT1', 'linkedinReplied', '2026-11-17T08:35:47.316Z', "Hi Jonathan, thanks for reaching out.\nThe position has been filled in the meantime"),
+        t_act('act_wa00000001', 'whatsappReplied', '2026-11-14T10:00:00.000Z', 'ok, call me', 'body'),
+        t_act('act_sms0000001', 'smsSent', '2026-11-13T10:00:00.000Z', 'Tried to reach you'),
+        t_act('act_zmA9XdejoX81', 'emailsSent', '2026-11-12T13:59:24.252Z', '<p>Hi Bart,</p><p>Just following up on the Data Engineer.</p><p>Best, JP</p>', 'message', ['subject' => 'Re: A permanent Data Engineer']),
+    ];
+    [$d] = t_desk([], 'jp@x.test', $m);
+    $t = $d->thread('ctc_fxTheirTurn2');
+    eq(['emailsSent', 'smsSent', 'whatsappReplied', 'linkedinReplied', 'linkedinSent', 'linkedinReplied'], array_column($t['messages'], 'type'), 'oldest at the top');
+    eq([true, true, false, false, true, false], array_column($t['messages'], 'out'));
+    eq(['Email', 'SMS', 'WhatsApp', 'LinkedIn', 'LinkedIn', 'LinkedIn'], array_column($t['messages'], 'channel'));
+    eq("Hi Jonathan, thanks for reaching out.\nThe position has been filled in the meantime", $t['messages'][3]['text'], 'LinkedIn text from `message`, line break kept');
+    eq('Hey Bart - No problem, how do the headcount plans look for the rest of the year and 2027?', $t['messages'][4]['text'], 'LinkedIn text from `text`');
+    eq(['ok, call me', 'Tried to reach you'], [$t['messages'][2]['text'], $t['messages'][1]['text']]);
+    eq(["Hi Bart,\nJust following up on the Data Engineer.\nBest, JP", 'Re: A permanent Data Engineer'], [$t['messages'][0]['text'], $t['messages'][0]['subject']]);
+    eq([null, null], [$t['messages'][3]['subject'], $t['messages'][3]['full']], 'subjects on emails only');
+    foreach ($t['messages'] as $msg) ok($msg['text'] !== '', 'no empty bubble: ' . $msg['type']);
+    eq('Q&A <3 tomorrow', CallDesk::messageText(['type' => 'linkedinSent', 'text' => 'Q&amp;A <3 tomorrow']), 'plain text is not run through the HTML stripper');
+    eq("x\ny", CallDesk::messageText(['type' => 'linkedinReplied', 'message' => '', 'text' => "x\r\ny"]), 'an empty `message` falls back to `text`');
+});
+
+test('inbox thread: "Load older" pages of 10 (skip), merged oldest first', function () {
+    $m = new MockLemlist();
+    t_inbox_fixture($m);
+    $acts = [];
+    for ($i = 0; $i < 13; $i++) $acts[] = t_act(sprintf('act_pg%05d', $i), $i % 2 ? 'linkedinReplied' : 'linkedinSent', sprintf('2026-11-%02dT10:00:00.000Z', 1 + $i), "Message $i");
+    $m->rawThreads['ctc_fxTheirTurn1'] = array_reverse($acts);
+    [$d, , $mock] = t_desk([], 'jp@x.test', $m);
+    $t = $d->thread('ctc_fxTheirTurn1');
+    eq([10, true, 'Message 3', 'Message 12'], [count($t['messages']), $t['hasOlder'], $t['messages'][0]['text'], $t['messages'][9]['text']], 'the newest 10');
+    $o = $d->thread('ctc_fxTheirTurn1', 10);
+    eq([['Message 0', 'Message 1', 'Message 2'], false], [array_column($o['messages'], 'text'), $o['hasOlder']]);
+    eq(10, (int) end($mock->calls)[2]['skip']);
+    ok(!isset(end($mock->calls)[2]['markAsRead']), '"Load older" does not mark read again');
+});
+
+test('inbox email: the reply text without the quoted history, the full email on demand; subject and attachment names', function () {
+    $quoted = '<div>Thanks Jonathan, Tuesday works.</div><div><br></div><div>Kind regards,<br>Carla</div><div><br></div>'
+        . '<div>On Mon, 17 Nov 2026 at 09:12, Jonathan Perkins &lt;jonathan@swooscale.com&gt; wrote:</div><blockquote><p>Hi Carla,</p><p>Would Tuesday work?</p></blockquote>';
+    eq("Thanks Jonathan, Tuesday works.\n\nKind regards,\nCarla", CallDesk::trimQuoted(CallDesk::messageText(['message' => $quoted])));
+    eq("Dag Jonathan,\nGraag.", CallDesk::trimQuoted("Dag Jonathan,\nGraag.\n\nOp ma 17 nov. 2026 om 09:12 schreef Jonathan Perkins <jonathan@swooscale.com>:\n> Hallo"));
+    eq('Sounds good.', CallDesk::trimQuoted("Sounds good.\n\n-----Original Message-----\nFrom: Jonathan\nSent: Monday"));
+    eq('Sounds good.', CallDesk::trimQuoted("Sounds good.\n\nFrom: Jonathan Perkins <jonathan@swooscale.com>\nSent: Monday, 17 November 2026 09:12\nTo: Carla"));
+    eq('Just one line, nothing quoted', CallDesk::trimQuoted('Just one line, nothing quoted'));
+    $m = new MockLemlist();
+    t_inbox_fixture($m);
+    $m->rawThreads['ctc_fxTheirTurn1'] = [
+        t_act('act_e2', 'emailsReplied', '2026-11-19T13:32:44.000Z', $quoted, 'message', ['subject' => 'RE: A permanent OT Cybersecurity Program Manager', 'hasAttachments' => true,
+            'attachments' => [['name' => 'job-description.pdf', 'size' => 1200], ['filename' => 'org-chart.png']]]),
+        t_act('act_e1', 'emailsSent', '2026-11-17T08:12:00.000Z', '<p>Hi Carla,</p><p>Would Tuesday work?</p>', 'message', ['subject' => 'A permanent OT Cybersecurity Program Manager']),
+    ];
+    [$d] = t_desk([], 'jp@x.test', $m);
+    $t = $d->thread('ctc_fxTheirTurn1');
+    $reply = $t['messages'][1];
+    eq("Thanks Jonathan, Tuesday works.\n\nKind regards,\nCarla", $reply['text']);
+    ok(str_contains((string) $reply['full'], 'Would Tuesday work?'), 'the full email, for "Show full email"');
+    eq(['RE: A permanent OT Cybersecurity Program Manager', ['job-description.pdf', 'org-chart.png'], true], [$reply['subject'], $reply['attachments'], $reply['hasAttachments']]);
+    eq(null, $t['messages'][0]['full'], 'nothing quoted: no toggle');
     $js = (string) file_get_contents(__DIR__ . '/../public/assets/app.js');
-    ok(str_contains($js, 'x.yourTurn = false;') && str_contains($js, 'if (st.inbox.filter === "needs") st.inbox.list = (st.inbox.list || []).filter('), 'app.js drops it from the view right after sending');
+    ok(str_contains($js, '"Show full email"') && str_contains($js, '"Load older messages"') && str_contains($js, '"Mark as unread"') && str_contains($js, '"Load more"'), 'UI');
+});
+
+test('inbox campaign (real API shape): the newest activity with a campaignId sets it; a paused one keeps its name; a direct contact is "Not in a campaign"; unknown until read', function () {
+    $m = new MockLemlist();
+    t_inbox_fixture($m);
+    $m->campaigns[] = ['_id' => 'cam_bzYxH8vakqDC8WJgj', 'name' => 'Friday Campaign - MPC', 'status' => 'paused', 'sequenceId' => 'seq_x', 'createdAt' => '2026-10-01T08:00:00Z'];
+    $m->rawThreads['ctc_fxOurLast01'] = [
+        t_act('act_c3', 'linkedinSent', '2026-11-23T15:47:27.895Z', 'Thanks for getting back to me', 'text', ['campaignId' => 'cam_bzYxH8vakqDC8WJgj', 'leadId' => 'lea_fxChris01']),
+        t_act('act_c2', 'linkedinReplied', '2026-11-21T06:56:29.034Z', 'No need to send more profiles', 'text', ['campaignId' => 'cam_bzYxH8vakqDC8WJgj', 'leadId' => 'lea_fxChris01']),
+        t_act('act_c1', 'emailsSent', '2026-10-02T08:00:00.000Z', '<p>Hi</p>', 'message', ['campaignId' => 'cam_it000001', 'leadId' => 'lea_fxOld']),
+    ];
+    $m->rawThreads['ctc_fxSentOnly1'] = [t_act('act_s1', 'emailsSent', '2026-11-22T16:00:00.000Z', '<p>Hi Sam,</p>', 'message', ['campaignId' => null, 'leadId' => null])];
+    $ten = [];
+    for ($i = 9; $i >= 0; $i--) $ten[] = t_act("act_u$i", 'emailsReplied', sprintf('2026-11-1%dT10:00:00.000Z', $i), '<p>x</p>', 'message', ['campaignId' => null, 'leadId' => null]);
+    $m->rawThreads['ctc_fxTheirTurn1'] = array_merge($ten, [t_act('act_u_old', 'emailsSent', '2026-10-01T10:00:00.000Z', '<p>first</p>', 'message', ['campaignId' => 'cam_hr000001', 'leadId' => 'lea_fxCarla'])]);
+    [$d] = t_desk([], 'jp@x.test', $m);
+    $by = array_column($d->inbox()['conversations'], null, 'contactId');
+    eq(['Friday Campaign - MPC', 'paused', 'lea_fxChris01', true, true], [$by['ctc_fxOurLast01']['campaign'], $by['ctc_fxOurLast01']['campaignStatus'], $by['ctc_fxOurLast01']['leadId'], $by['ctc_fxOurLast01']['inCampaign'], $by['ctc_fxOurLast01']['canLinkedin']],
+        'the newest activity with a campaign; a paused campaign keeps its name');
+    eq([false, false], [$by['ctc_fxSentOnly1']['inCampaign'], $by['ctc_fxSentOnly1']['canLinkedin']], 'a direct contact (every activity read, none with a campaign)');
+    eq([null, null], [$by['ctc_fxTheirTurn1']['inCampaign'], $by['ctc_fxTheirTurn1']['campaignId']], '10 activities without a campaign but older ones exist: not known yet, never "Not in a campaign"');
+    $t = $d->thread('ctc_fxTheirTurn1', 10); // "Load older" reaches the activity with the campaign
+    eq(['HR decision makers – Belgium', true], [$t['campaign'], $t['inCampaign']]);
+    eq('HR decision makers – Belgium', array_column($d->inbox()['conversations'], null, 'contactId')['ctc_fxTheirTurn1']['campaign'], 'remembered for the list');
 });

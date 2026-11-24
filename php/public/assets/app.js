@@ -1086,7 +1086,7 @@
     var wantTask = new URLSearchParams(window.location.search).get("task"); // "Log call" on a manual call task
     var st = { sub: sub === "manual" || sub === "inbox" ? sub : "calls", data: null, error: null, msg: null, sel: null, ans: null, res: null, note: "", cb: "",
       attempt: newAttempt(), caller: "", logged: {}, mFilter: "all", mDone: {}, busy: false,
-      inbox: { filter: "needs", list: null, unread: 0, needs: 0, badge: 0, sel: null, thread: null, ch: "email", draft: "", loading: false, sent: [] }, seen: {} };
+      inbox: { filter: "all", q: "", page: 1, total: 0, hasMore: false, more: false, older: false, full: {}, list: null, unread: 0, sel: null, thread: null, ch: "email", draft: "", loading: false, sent: [] }, seen: {} };
     var MT = { call: ["Call again", "sd-c-call"], li: ["LinkedIn message", "sd-c-message"], email: ["Email to review", "sd-c-email"], ooo: ["Out of office", "sd-c-fin"],
       visit: ["LinkedIn visit", "sd-c-invite"], task: ["Task", "sd-c-muted"] };
     var MF = [["all", "All"], ["call", "Calls"], ["li", "LinkedIn"], ["email", "Email"], ["ooo", "Out of office"], ["visit", "LinkedIn visit"], ["task", "Other"]];
@@ -1145,29 +1145,63 @@
         });
       }, function (e) { st.error = e.message; }).then(render);
     }
+    // the lemlist inbox, as lemlist shows it: newest activity first, 25 at a time ("Load more"); a refresh keeps what is loaded
+    function inboxQuery(page, per) {
+      return "/api/calls/inbox?filter=" + encodeURIComponent(st.inbox.filter) + "&q=" + encodeURIComponent(st.inbox.q) + "&page=" + page + (per ? "&per=" + per : "");
+    }
     function loadInbox(keepThread) {
-      st.inbox.loading = !st.inbox.list;
-      return api("/api/calls/inbox?filter=" + encodeURIComponent(st.inbox.filter)).then(function (d) {
-        st.inbox.list = d.conversations; st.inbox.unread = d.unread; st.inbox.needs = d.needs; st.inbox.badge = d.badge; st.inbox.loading = false;
-        setBadge("sd-badge-inbox", d.badge);
-        if (!st.inbox.sel && d.conversations.length) openThread(d.conversations[0].contactId);
-        else if (keepThread && st.inbox.sel) openThread(st.inbox.sel, true);
-      }, function (e) { st.inbox.loading = false; st.inbox.error = e.message; }).then(render);
+      var ib = st.inbox;
+      ib.loading = !ib.list;
+      var url = keepThread && ib.page > 1 ? inboxQuery(1, ib.page * 25) : inboxQuery(1);
+      if (!keepThread) ib.page = 1;
+      return api(url).then(function (d) {
+        ib.list = d.conversations; ib.total = d.total; ib.hasMore = keepThread && ib.page > 1 ? ib.list.length < d.total : d.hasMore; ib.unread = d.unread; ib.loading = false;
+        setBadge("sd-badge-inbox", d.unread);
+        if (!ib.sel && d.conversations.length) openThread(d.conversations[0].contactId);
+        else if (keepThread && ib.sel) openThread(ib.sel, true);
+      }, function (e) { ib.loading = false; ib.error = e.message; }).then(render);
+    }
+    function loadMore() {
+      var ib = st.inbox;
+      ib.more = true; render();
+      api(inboxQuery(ib.page + 1)).then(function (d) {
+        var seen = {};
+        (ib.list || []).forEach(function (x) { seen[x.contactId] = 1; });
+        ib.list = (ib.list || []).concat(d.conversations.filter(function (x) { return !seen[x.contactId]; }));
+        ib.page = d.page; ib.hasMore = d.hasMore; ib.total = d.total; ib.more = false;
+      }, function (e) { ib.more = false; say("error", e.message); }).then(render);
     }
     function openThread(contactId, quiet) {
-      if (!quiet) { st.inbox.sel = contactId; st.inbox.thread = null; st.inbox.draft = ""; render(); }
+      if (!quiet) { st.inbox.sel = contactId; st.inbox.thread = null; st.inbox.draft = ""; st.inbox.full = {}; render(); }
       return api("/api/calls/thread?contactId=" + encodeURIComponent(contactId)).then(function (t) {
         if (st.inbox.sel !== contactId) return;
+        if (quiet && st.inbox.thread && st.inbox.thread.contactId === contactId && st.inbox.thread.skip + st.inbox.thread.messages.length > t.messages.length) {
+          t.messages = mergeMsgs(st.inbox.thread.messages, t.messages); t.hasOlder = st.inbox.thread.hasOlder; // keep "Load older" pages on a refresh
+        }
         st.inbox.thread = t;
         if (!t.canLinkedin) st.inbox.ch = "email";
         else if (!quiet) { var c = (st.inbox.list || []).filter(function (x) { return x.contactId === contactId; })[0]; st.inbox.ch = c && c.channel === "linkedin" ? "linkedin" : "email"; }
-        if (t.markedRead) (st.inbox.list || []).forEach(function (x) {
+        if (t.markedRead || !quiet) (st.inbox.list || []).forEach(function (x) {
           if (x.contactId !== contactId || !x.unread) return;
-          x.unread = false; st.inbox.unread = Math.max(0, st.inbox.unread - 1);
-          if (!x.yourTurn) st.inbox.badge = Math.max(0, st.inbox.badge - 1); // the badge counts our turn + unread
+          x.unread = false; st.inbox.unread = Math.max(0, st.inbox.unread - 1); // opening it marks it read, as in lemlist
+          setBadge("sd-badge-inbox", st.inbox.unread);
         });
-        if (t.markedRead) setBadge("sd-badge-inbox", st.inbox.badge);
       }, function (e) { st.inbox.error = e.message; }).then(render);
+    }
+    function mergeMsgs(a, b) {
+      var byId = {}, out = [];
+      a.concat(b).forEach(function (m) { var k = m.id || (m.at + m.type); if (!byId[k]) { byId[k] = 1; out.push(m); } });
+      return out.sort(function (x, y) { return x.at < y.at ? -1 : x.at > y.at ? 1 : 0; });
+    }
+    function loadOlder() {
+      var t = st.inbox.thread;
+      if (!t) return;
+      st.inbox.older = true; render();
+      api("/api/calls/thread?contactId=" + encodeURIComponent(t.contactId) + "&skip=" + t.messages.length).then(function (o) {
+        if (!st.inbox.thread || st.inbox.thread.contactId !== t.contactId) return;
+        st.inbox.thread.messages = mergeMsgs(o.messages, st.inbox.thread.messages);
+        st.inbox.thread.hasOlder = o.hasOlder;
+      }, function (e) { say("error", e.message); }).then(function () { st.inbox.older = false; render(); });
     }
     // the call script (the step's lead variable, filled in) with a Copy button; the raw step text when the lead has none
     function copyBtn(text) {
@@ -1374,54 +1408,74 @@
       });
     }
 
-    // ---------------------------------------------------------- C. inbox
+    // ---------------------------------------------------------- C. inbox (mirrors the lemlist inbox)
+    function campLine(x) {
+      if (x.inCampaign === false) return "Not in a campaign";
+      var camp = x.campaign ? x.campaign + (x.campaignStatus && x.campaignStatus !== "running" ? " · " + x.campaignStatus : "") : "";
+      return [x.company, camp, x.signal].filter(Boolean).join(" · ");
+    }
     function inboxSection() {
       var ib = st.inbox, d = st.data;
       var left = h("div", { class: "sd-k-ileft" });
+      var search = h("input", { id: "inbox-search", type: "search", class: "sd-k-isearch", placeholder: "Search name, email or company", "aria-label": "Search conversations", maxlength: "100" });
+      search.value = ib.q;
+      search.addEventListener("input", function () {
+        ib.q = search.value;
+        clearTimeout(ib.qTimer);
+        ib.qTimer = setTimeout(function () { ib.sel = null; loadInbox(); }, 350);
+      });
       left.appendChild(h("div", { class: "sd-k-ihead" },
-        h("div", { class: "sd-o-between" }, h("h2", { class: "sd-o-h2", text: "Inbox" }), h("span", { class: "sd-muted sd-o-small", text: ib.needs + " need a reply · " + ib.unread + " unread · synced with lemlist" })),
-        h("div", { class: "sd-k-chips", role: "group", "aria-label": "Inbox filter" }, [["needs", "Needs reply"], ["all", "All"], ["unread", "Unread"], ["Interested", "Interested"], ["Meeting", "Meeting"]].map(function (f) {
-          var b = btn(f[1], ib.filter === f[0], function () { ib.filter = f[0]; loadInbox(); }, "sd-btn-sm");
-          if (f[0] === "needs" && ib.needs) b.appendChild(h("span", { class: "sd-k-tabcount", text: " " + ib.needs }));
-          return b;
+        h("div", { class: "sd-o-between" }, h("h2", { class: "sd-o-h2", text: "Inbox" }), h("span", { class: "sd-muted sd-o-small", text: ib.unread + " unread · " + ib.total + (ib.filter === "all" && !ib.q ? " conversations" : " shown") + " · as in lemlist" })),
+        search,
+        h("div", { class: "sd-k-chips", role: "group", "aria-label": "Inbox filter" }, [["all", "All"], ["unread", "Unread"], ["Interested", "Interested"], ["Meeting", "Meeting"], ["Not interested", "Not interested"], ["Out of office", "Out of office"]].map(function (f) {
+          return btn(f[1], ib.filter === f[0], function () { ib.filter = f[0]; ib.sel = null; loadInbox(); }, "sd-btn-sm");
         }))));
       if (ib.loading) left.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "Reading the lemlist inbox…" }));
-      else if (ib.list && !ib.list.length) left.appendChild(h("p", { class: "sd-k-empty sd-muted", text: ib.filter === "needs" ? "Nothing waiting for a reply." : "No conversations here." }));
+      else if (ib.list && !ib.list.length) left.appendChild(h("p", { class: "sd-k-empty sd-muted", text: ib.q ? "No conversation matches \"" + ib.q + "\"." : "No conversations here." }));
       (ib.list || []).forEach(function (c) {
         left.appendChild(h("button", { type: "button", class: "sd-k-conv" + (c.contactId === ib.sel ? " sd-k-conv-on" : ""), "aria-current": c.contactId === ib.sel ? "true" : null, onclick: function () { openThread(c.contactId); } },
-          h("span", { class: "sd-o-between" }, h("span", { class: "sd-k-convname" + (c.unread ? " sd-k-unread" : "") }, h("span", { class: "sd-dot " + (c.unread ? "sd-c-accent" : "sd-k-nodot"), "aria-hidden": "true" }), c.name + (c.unread ? "" : "")),
+          h("span", { class: "sd-o-between" }, h("span", { class: "sd-k-convname" + (c.unread ? " sd-k-unread" : "") }, h("span", { class: "sd-dot " + (c.unread ? "sd-c-accent" : "sd-k-nodot"), "aria-hidden": "true" }), c.name, c.unread ? h("span", { class: "sr-only", text: " (unread)" }) : null),
             h("span", { class: "sd-muted sd-o-small", text: when(c.at) })),
-          h("span", { class: "sd-muted sd-o-small", text: c.inCampaign ? [c.company, c.campaign + (c.more ? " +" + c.more + " more" : ""), c.signal].filter(Boolean).join(" · ") : "Not in a campaign" }),
-          h("span", { class: "sd-k-snippet" }, h("span", { class: "sd-k-in", "aria-label": "Their reply:", text: "↩ " }), c.snippet || "(no preview)"),
-          c.youWrote ? h("span", { class: "sd-k-youwrote", text: "You: " + c.youWrote }) : null,
+          h("span", { class: "sd-muted sd-o-small", text: campLine(c) }),
+          h("span", { class: "sd-k-snippet" }, c.ours ? h("span", { class: "sd-k-you", text: "You: " }) : null, c.snippet || ""),
           h("span", { class: "sd-k-chips6" }, h("span", { class: "sd-k-chip " + (CH[c.channel] || CH.email)[1], text: (CH[c.channel] || CH.email)[0] }),
-            c.yourTurn ? h("span", { class: "sd-k-turn", text: "Your turn" }) : null,
-            c.label ? h("span", { class: "sd-k-lbl " + (LBL[c.label] || "sd-c-muted"), text: c.label }) : null)));
+            (c.labels || []).map(function (l) { return h("span", { class: "sd-k-lbl " + (LBL[l] || "sd-c-muted"), text: l }); }))));
       });
+      if (ib.hasMore) left.appendChild(h("div", { class: "sd-k-more" }, btn(ib.more ? "Loading…" : "Load more", null, loadMore, "sd-btn-sm")));
       var right = h("div", { class: "sd-k-iright" });
       var t = ib.thread;
       if (!ib.sel) right.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "Choose a conversation." }));
       else if (!t) right.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "Loading the conversation…" }));
       else {
         var conv = (ib.list || []).filter(function (c) { return c.contactId === t.contactId; })[0] || {};
+        var unreadBtn = btn("Mark as unread", null, function () { markUnread(conv.contactId ? conv : { contactId: t.contactId }); }, "sd-btn-sm");
         right.appendChild(h("div", { class: "sd-k-thead" },
           h("div", { class: "sd-o-stack-xxs" }, h("span", { class: "sd-k-tname", text: t.name || conv.name || "Contact" }),
-            h("span", { class: "sd-muted sd-o-small13", text: t.leadId ? [t.jobTitle, t.company, t.campaign + (t.more ? " +" + t.more + " more" : ""), t.signal].filter(Boolean).join(" · ") : "Not a campaign lead" })),
+            h("span", { class: "sd-muted sd-o-small13", text: [t.jobTitle, campLine(t)].filter(Boolean).join(" · ") })),
           h("div", { class: "sd-k-chips", role: "group", "aria-label": "Label" }, ["Interested", "Meeting", "Not interested", "Out of office"].map(function (l) {
             var b = btn(l, conv.label === l, function () { setLabel(conv, conv.label === l ? null : l); }, "sd-btn-sm");
-            if (d.viewOnly) b.disabled = true;
+            if (d.viewOnly || !conv.contactId) b.disabled = true;
             return b;
-          }))));
-        right.appendChild(h("div", { class: "sd-k-msgs" }, t.messages.concat(ib.sent.filter(function (s) { return s.contactId === t.contactId; })).map(function (m) {
-          return h("div", { class: "sd-k-msgrow" + (m.out ? " sd-k-out" : "") }, h("div", { class: "sd-k-bubble" + (m.out ? " sd-k-bubble-out" : "") },
-            h("span", { class: "sd-k-meta", text: (m.out ? "You · " : "") + m.who + " · " + m.channel + " · " + whenLong(m.at) }),
-            h("span", { class: "sd-k-text", text: (m.subject && !m.out ? "" : "") + m.text })));
-        })));
+          }).concat([unreadBtn]))));
+        var msgs = h("div", { class: "sd-k-msgs" });
+        if (t.hasOlder) msgs.appendChild(h("div", { class: "sd-k-more" }, btn(ib.older ? "Loading…" : "Load older messages", null, loadOlder, "sd-btn-sm")));
+        t.messages.concat(ib.sent.filter(function (s) { return s.contactId === t.contactId; })).forEach(function (m) {
+          var key = m.id || (m.at + m.type);
+          var showFull = !!ib.full[key];
+          var body = h("div", { class: "sd-k-bubble" + (m.out ? " sd-k-bubble-out" : "") },
+            h("span", { class: "sd-k-meta", text: (m.out ? "You · " + m.who : (t.name || conv.name || m.who)) + " · " + m.channel + " · " + whenLong(m.at) }),
+            m.subject ? h("span", { class: "sd-k-subject", text: m.subject }) : null,
+            h("span", { class: "sd-k-text", text: showFull && m.full ? m.full : m.text }),
+            m.attachments && m.attachments.length ? h("span", { class: "sd-k-files", text: "Attachments: " + m.attachments.join(", ") }) : (m.hasAttachments ? h("span", { class: "sd-k-files", text: "Has attachments (open in lemlist)" }) : null),
+            m.full ? h("button", { type: "button", class: "sd-k-fulltoggle", "aria-expanded": showFull ? "true" : "false", onclick: function () { ib.full[key] = !showFull; render(); }, text: showFull ? "Show less" : "Show full email" }) : null);
+          msgs.appendChild(h("div", { class: "sd-k-msgrow" + (m.out ? " sd-k-out" : "") }, body));
+        });
+        right.appendChild(msgs);
         var box = h("textarea", { id: "reply-box", rows: "4", class: "sd-k-textarea", placeholder: "Write your reply…", maxlength: "5000" });
         box.value = ib.draft;
         box.addEventListener("input", function () { ib.draft = box.value; });
         var liBtn = btn("LinkedIn", ib.ch === "linkedin", function () { ib.ch = "linkedin"; render(); }, "sd-btn-sm");
-        if (!t.canLinkedin) { liBtn.disabled = true; liBtn.title = "LinkedIn replies work for campaign leads only"; }
+        if (!t.canLinkedin) { liBtn.disabled = true; liBtn.title = "LinkedIn replies need the lead of a campaign"; }
         var send = h("button", { type: "button", class: "sd-k-send", onclick: function () { sendReply(t); }, text: "Send via lemlist" });
         if (d.viewOnly) send.disabled = true;
         right.appendChild(h("div", { class: "sd-k-compose" },
@@ -1444,22 +1498,25 @@
           if (r.preview) { st.msg = { kind: "warn", text: previewText(r) }; render(); return; }
           st.inbox.sent.push({ contactId: t.contactId, out: true, who: st.data.sender ? st.data.sender.name : "You", channel: ch === "email" ? "Email" : "LinkedIn", at: new Date().toISOString(), text: text });
           st.inbox.draft = "";
-          (st.inbox.list || []).forEach(function (x) { // answered: out of "Needs reply" now; lemlist confirms on the next refresh
-            if (x.contactId !== t.contactId || !x.yourTurn) return;
-            x.yourTurn = false; x.youWrote = text.replace(/\s+/g, " ").slice(0, 90);
-            st.inbox.needs = Math.max(0, st.inbox.needs - 1);
-            if (!x.unread) st.inbox.badge = Math.max(0, st.inbox.badge - 1);
-          });
-          if (st.inbox.filter === "needs") st.inbox.list = (st.inbox.list || []).filter(function (x) { return x.contactId !== t.contactId; });
-          setBadge("sd-badge-inbox", st.inbox.badge);
+          (st.inbox.list || []).forEach(function (x) { if (x.contactId === t.contactId) { x.ours = true; x.snippet = text.replace(/\s+/g, " ").slice(0, 90); x.at = new Date().toISOString(); } });
           st.msg = { kind: "ok", text: r.message };
           render();
         }, function (e) { say("error", e.message); });
       });
     }
+    function markUnread(conv) {
+      api("/api/calls/unread", { method: "POST", body: { contactId: conv.contactId } }).then(function (r) {
+        (st.inbox.list || []).forEach(function (x) { if (x.contactId === conv.contactId && !x.unread) { x.unread = true; st.inbox.unread++; } });
+        setBadge("sd-badge-inbox", st.inbox.unread);
+        st.inbox.sel = null; st.inbox.thread = null; // leave it, as lemlist does
+        st.msg = { kind: "ok", text: r.message }; render();
+      }, function (e) { say("error", e.message); });
+    }
     function setLabel(conv, label) {
       api("/api/calls/label", { method: "POST", body: { contactId: conv.contactId, label: label } }).then(function (r) {
         if (r.preview) { st.msg = { kind: "warn", text: previewText(r) }; render(); return; }
+        var ours = ["Interested", "Meeting", "Not interested", "Out of office"];
+        conv.labels = (conv.labels || []).filter(function (l) { return ours.indexOf(l) < 0; }).concat(r.label ? [r.label] : []);
         conv.label = r.label; st.msg = { kind: "ok", text: r.message }; render();
       }, function (e) { say("error", e.message); });
     }

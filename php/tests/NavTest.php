@@ -108,30 +108,29 @@ test('nav: a top tab opens its last-used sub-tab, remembered per user (first one
     eq($before, (string) file_get_contents("$dir/" . Nav::FILE));
 });
 
-test('nav badges: Calls = due call + manual tasks; Inbox = conversations where it is our turn plus unread, re-counted every 2 minutes or after a reply webhook', function () {
+test('nav badges: Calls = due call + manual tasks; Inbox = unread conversations (as lemlist), re-counted every 2 minutes or after a reply webhook', function () {
     [$d, $store, $mock] = t_desk();
     $dir = $store->dir;
     eq(null, CallDesk::cachedUnread($dir));
     $from = count($mock->calls);
-    $u = $d->unread();
-    eq([4, 4, 2], [$u['badge'], $u['needs'], $u['unread']], '4 replies waiting for us (2 of them unread); the sent-only conversation does not count');
-    eq(4, CallDesk::cachedUnread($dir));
+    eq([2, 2], (fn ($u) => [$u['badge'], $u['unread']])($d->unread()), 'Robin and Cas are unread');
+    eq(2, CallDesk::cachedUnread($dir));
     $n = count($mock->calls);
     ok($n > $from, 'first count reads the lemlist inbox');
-    eq(4, $d->unread()['badge']);
+    eq(2, $d->unread()['badge']);
     eq($n, count($mock->calls), 'cached for 2 minutes: no lemlist request');
-    // we answered Mia in lemlist: no longer our turn (read, so it leaves the badge)
-    $mock->inbox['ctc_it05']['thread'][] = ['_id' => 'act_nav_sent', 'type' => 'emailsSent', 'createdAt' => '2026-11-04T08:00:00.000Z', 'message' => '<p>Great, Tuesday then.</p>', 'sendUserId' => \SignalDesk\MockLemlist::USER];
+    // a new unread reply arrives (webhook): counted again at once
+    $mock->inbox['ctc_it05']['users'][0]['read'] = false;
     $cfg = ['LEMLIST_BACKEND' => 'mock', 'LEMLIST_WEBHOOK_SECRET' => T_LEM_SECRET];
-    \SignalDesk\LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'act_nav_reply', 'type' => 'emailsReplied', 'secret' => T_LEM_SECRET, 'contactId' => 'ctc_hr02']), $store, fn () => T_CALL_NOW + 30);
+    \SignalDesk\LemlistWebhook::handle($cfg, 'POST', json_encode(['_id' => 'act_nav_reply', 'type' => 'emailsReplied', 'secret' => T_LEM_SECRET, 'contactId' => 'ctc_it05']), $store, fn () => T_CALL_NOW + 30);
     eq(3, $d->unread()['badge'], 'a reply webhook makes it count again at once');
     $d->now = fn () => T_CALL_NOW + 400;
     $mock->inbox['ctc_hr02']['users'][0]['read'] = true;
-    eq([3, 1], (fn ($x) => [$x['badge'], $x['unread']])($d->unread()), 'and again after 2 minutes (an unread conversation that is also our turn still counts once)');
+    eq(2, $d->unread()['badge'], 'and again after 2 minutes');
     // Calls badge
     $html = Views::shell('calls', ['email' => 'jp@x.test', 'name' => 'JP'], t_nav_config($dir));
     ok(str_contains($html, '<span id="sd-badge-calls" class="sd-top-badge">' . CallDesk::dueCount($store) . '</span>'));
-    ok(str_contains($html, '<span id="sd-badge-inbox" class="sd-top-badge">3</span>'));
+    ok(str_contains($html, '<span id="sd-badge-inbox" class="sd-top-badge">2</span>'));
     $js = (string) file_get_contents(__DIR__ . '/../public/assets/app.js');
-    ok(str_contains($js, 'setBadge("sd-badge-calls", d.counts.badge)') && str_contains($js, 'setBadge("sd-badge-inbox", d.badge)') && str_contains($js, 'api("/api/inbox/unread")'), 'app.js keeps both badges current');
+    ok(str_contains($js, 'setBadge("sd-badge-calls", d.counts.badge)') && str_contains($js, 'setBadge("sd-badge-inbox", d.unread)') && str_contains($js, 'api("/api/inbox/unread")'), 'app.js keeps both badges current');
 });

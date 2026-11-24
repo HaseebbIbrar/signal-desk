@@ -234,8 +234,8 @@ final class App
                     'outreach/lead' => $this->outreach()->lead(self::str($_GET['id'] ?? '', 64)),
                     'outreach/compare' => $this->outreach()->compare($this->outreachIds(), self::str($_GET['p'] ?? '7', 8)),
                     'calls' => $this->calls($user['email'])->view(),
-                    'calls/inbox' => $this->calls($user['email'])->inbox(self::str($_GET['filter'] ?? 'needs', 20)),
-                    'calls/thread' => $this->calls($user['email'])->thread(self::str($_GET['contactId'] ?? '', 64)),
+                    'calls/inbox' => $this->calls($user['email'])->inbox(self::str($_GET['filter'] ?? 'all', 20), self::str($_GET['q'] ?? '', 100), max(1, min(200, (int) ($_GET['page'] ?? 1))), max(1, min(500, (int) ($_GET['per'] ?? CallDesk::PAGE_SIZE)))),
+                    'calls/thread' => $this->calls($user['email'])->thread(self::str($_GET['contactId'] ?? '', 64), max(0, min(5000, (int) ($_GET['skip'] ?? 0)))),
                     'calls/updates' => $this->calls($user['email'])->updates(),
                     'inbox/unread' => $this->calls($user['email'])->unread(),
                     'atlas/search' => $this->requireAtlas()->search(
@@ -294,6 +294,7 @@ final class App
                 'calls/task' => $this->calls($user['email'])->taskAction($body),
                 'calls/reply' => $this->calls($user['email'])->reply($body),
                 'calls/label' => $this->calls($user['email'])->label($body),
+                'calls/unread' => $this->calls($user['email'])->markUnread($body),
                 'jd/parse' => $this->jd()->parse($body['text'] ?? null, $user['email']),
                 'jd/match' => $this->jd()->start($body['requirements'] ?? null, self::str($body['title'] ?? ''), self::str($body['sub'] ?? ''), self::str($body['group'] ?? ''), $user['email'], $body['jdText'] ?? ''),
                 'jd/page' => $this->jd()->page(self::str($body['matchId'] ?? '', 40), max(1, min(10, (int) ($body['page'] ?? 1)))),

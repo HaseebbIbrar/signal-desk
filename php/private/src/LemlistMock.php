@@ -159,8 +159,10 @@ final class MockLemlist
         $this->tasks[] = $task('opp_vis00001', 'manual', 'upcoming', 'Visit LinkedIn profile', 'lea_hr03', $hr, '2026-12-02T09:00:00.000Z', true, 'Fin', 'Ished', 'Done NV');
         // inbox: label ids, conversations (contactId => thread)
         $this->labels = [['_id' => 'lbl_interest1', 'name' => 'Interested', 'color' => '#22c55e'], ['_id' => 'lbl_vip000001', 'name' => 'VIP', 'color' => '#f59e0b']];
-        $msg = fn (string $type, string $at, string $text, ?string $subject = null) => ['_id' => 'act_m' . substr(md5($type . $at), 0, 10), 'type' => $type, 'createdAt' => $at,
-            'message' => $text, 'subject' => $subject] + (str_ends_with($type, 'Replied') ? [] : ['sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins']);
+        // like live (checked 2026-11-24): LinkedIn activities keep their text in `text`, emails in `message` (HTML); replies carry aiLeadInterestScore (0-1)
+        $msg = fn (string $type, string $at, string $text, ?string $subject = null, ?float $score = null) => ['_id' => 'act_m' . substr(md5($type . $at), 0, 10), 'type' => $type, 'createdAt' => $at,
+            (str_starts_with($type, 'linkedin') ? 'text' : 'message') => $text, 'subject' => $subject] + ($score !== null ? ['aiLeadInterestScore' => $score] : [])
+            + (str_ends_with($type, 'Replied') ? ['sendUserId' => self::USER] : ['sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins']);
         $conv = function (string $ctc, string $lead, string $name, array $channels, bool $read, array $labels, array $msgs) {
             $last = end($msgs);
             $this->inbox[$ctc] = ['_id' => 'ibx_' . substr($ctc, 4), 'contactId' => $ctc, 'leadId' => $lead, 'channels' => $channels, 'lastActivityAt' => $last['createdAt'],
@@ -169,13 +171,13 @@ final class MockLemlist
         };
         $conv('ctc_it02', 'lea_it02', 'Robin Replier', ['email'], false, ['lbl_vip000001'], [
             $msg('emailsSent', '2026-11-02T08:05:00.000Z', '<p>Hi Robin, we place IT people in Belgium.</p>', 'Your Head of IT search'),
-            $msg('emailsReplied', '2026-11-02T12:00:00.000Z', '<p>Hi Jonathan, timing is good.<br>Can you send two profiles first?</p>', 'Re: Your Head of IT search')]);
+            $msg('emailsReplied', '2026-11-02T12:00:00.000Z', '<p>Hi Jonathan, timing is good.<br>Can you send two profiles first?</p>', 'Re: Your Head of IT search', 0.8333)]);
         $conv('ctc_it05', 'lea_it05', 'Mia Meeting', ['email'], true, ['lbl_interest1'], [
             $msg('emailsSent', '2026-11-02T08:15:00.000Z', '<p>Hi Mia, we place IT people in Belgium.</p>', 'Your IT Director search'),
-            $msg('emailsReplied', '2026-11-03T09:00:00.000Z', '<p>Yes, let us talk next week.</p>')]);
+            $msg('emailsReplied', '2026-11-03T09:00:00.000Z', '<p>Yes, let us talk next week.</p>', null, 0.8333)]);
         $conv('ctc_hr02', 'lea_hr02', 'Cas Connected', ['linkedin'], false, [], [
             $msg('linkedinSent', '2026-11-07T18:05:00.000Z', 'Thanks for connecting, Cas!'),
-            $msg('linkedinReplied', '2026-11-08T08:30:00.000Z', 'Interesting. Call me this week, mornings are best.')]);
+            $msg('linkedinReplied', '2026-11-08T08:30:00.000Z', 'Interesting. Call me this week, mornings are best.', null, 0.5)]);
         $conv('ctc_sent0001', 'lea_it01', 'Ciso Example', ['email'], true, [], [ // sent-only: no reply yet (not in the Inbox)
             $msg('emailsSent', '2026-11-12T08:00:00.000Z', '<p>Hi Ciso, last note from me.</p>', 'Re: Your CISO search')]);
         $conv('ctc_ext01', '', 'Alex Outsider', ['email'], true, [], [
@@ -206,11 +208,25 @@ final class MockLemlist
             'channels' => ['email', 'linkedin'], 'lastActivityAt' => $sent['createdAt'], 'lastRepliedChannel' => 'email', 'users' => [['userId' => self::USER, 'sender' => true, 'read' => false]],
             'contact' => ['_id' => 'ctc_scope0001', 'fullName' => 'Sam Scope'], 'labels' => [], 'thread' => [
                 ['_id' => 'act_mscope000', 'type' => 'emailsReplied', 'createdAt' => '2026-11-13T10:56:58.000Z', 'subject' => 'Re: A permanent Data Architect for Scope Cooling',
-                    'message' => '<p>Hi Jonathan,</p><p>Interesting profile. Is he open to a hybrid role in Oostkamp? Happy to see his CV.</p>'], $sent]];
-        $this->inbox['ctc_kimli0001'] = ['_id' => 'ibx_kimli0001', 'contactId' => 'ctc_kimli0001', 'leadId' => '', 'email' => null, 'linkedinUrl' => 'https://www.linkedin.com/in/example-hr-director/',
+                    'message' => '<p>Hi Jonathan,</p><p>Interesting profile. Is he open to a hybrid role in Oostkamp? Happy to see his CV.</p>', 'aiLeadInterestScore' => 0.8333], $sent]];
+        $this->inbox['ctc_kimli0001'] = ['_id' => 'ibx_kimli0001', 'contactId' => 'ctc_kimli0001', 'leadId' => '', 'campaignId' => 'cam_hr000001', 'campaignLeadId' => 'lea_hr01', 'email' => null, 'linkedinUrl' => 'https://www.linkedin.com/in/example-hr-director/',
             'channels' => ['linkedin'], 'lastActivityAt' => '2026-11-15T16:40:00.000Z', 'lastRepliedChannel' => 'linkedin', 'users' => [['userId' => self::USER, 'sender' => true, 'read' => true]],
             'contact' => ['_id' => 'ctc_kimli0001', 'fullName' => 'Kim Example'], 'labels' => [], 'thread' => [
-                ['_id' => 'act_mkimli001', 'type' => 'linkedinReplied', 'createdAt' => '2026-11-15T16:40:00.000Z', 'message' => 'Thanks Jonathan. We are hiring two IT profiles in Q1, can we talk on Tuesday?']]];
+                ['_id' => 'act_mkimli001', 'type' => 'linkedinReplied', 'createdAt' => '2026-11-15T16:40:00.000Z', 'text' => 'Thanks Jonathan. We are hiring two IT profiles in Q1, can we talk on Tuesday?',
+                    'aiLeadInterestScore' => 0.6667, 'sendUserId' => self::USER]]];
+        // a LinkedIn thread shaped like the live one that showed empty bubbles: text in `text`, the last reply a "no" (negative score)
+        $li = fn (string $id, string $type, string $at, string $text, ?float $score = null) => ['_id' => $id, 'type' => $type, 'createdAt' => $at, 'subject' => null, 'text' => $text, 'leadCompanyName' => 'Kuiper Logistics',
+            'sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins'] + ($score !== null ? ['aiLeadInterestScore' => $score] : []);
+        $this->inbox['ctc_bram00001'] = ['_id' => 'ibx_bram00001', 'contactId' => 'ctc_bram00001', 'leadId' => '', 'campaignId' => 'cam_old00001', 'campaignLeadId' => 'lea_old00001', 'email' => 'bram.example@kuiperlogistics.example',
+            'linkedinUrl' => 'https://www.linkedin.com/in/bram-example', 'channels' => ['email', 'linkedin'], 'lastActivityAt' => '2026-11-17T08:39:15.245Z', 'lastRepliedChannel' => 'linkedin',
+            'users' => [['userId' => self::USER, 'sender' => true, 'read' => true]], 'contact' => ['_id' => 'ctc_bram00001', 'fullName' => 'Bram Example'], 'labels' => [], 'thread' => [
+                ['_id' => 'act_mbram0001', 'type' => 'emailsSent', 'createdAt' => '2026-11-11T08:10:59.304Z', 'subject' => 'A permanent Data Engineer for Kuiper Logistics',
+                    'message' => "Hi Bram,\n\nI noticed Kuiper Logistics is hiring a Data Engineer in Tessenderlo, and I've got someone who lines up almost one-to-one.\n\nWant me to send his CV?\n\nBest, JP",
+                    'sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins'],
+                $li('act_mbram0002', 'linkedinSent', '2026-11-16T15:48:11.001Z', "Hey Bram, last nudge here on that Data Engineer. If there's any interest I'll send his CV straight over."),
+                $li('act_mbram0003', 'linkedinReplied', '2026-11-17T08:35:47.316Z', "Hi Jonathan, thanks for reaching out.\nThe position has been filled in the meantime", 0.1667),
+                $li('act_mbram0004', 'linkedinSent', '2026-11-17T08:37:34.345Z', 'No problem, how do the headcount plans look for the rest of the year and 2027?'),
+                $li('act_mbram0005', 'linkedinReplied', '2026-11-17T08:39:15.245Z', 'for now my team is complete so no openings in the foreseeable future', 0.1667)]];
     }
 
     /** Local mock mode only: keep tasks, calls, inbox and labels across requests in a JSON file (tests stay in memory). */
@@ -285,7 +301,7 @@ final class MockLemlist
                 $pg = max(1, (int) ($q['page'] ?? 1));
                 return $ok(['data' => array_slice($this->rawInbox, ($pg - 1) * $per, $per), 'pagination' => ['totalItems' => count($this->rawInbox), 'currentPage' => $pg, 'totalPages' => (int) ceil(count($this->rawInbox) / $per)]]);
             }
-            $first = fn (array $m) => strtok(trim(html_entity_decode(strip_tags((string) preg_replace('~<br\s*/?>|</p>~i', "\n", (string) $m['message'])))), "\n") ?: '';
+            $first = fn (array $m) => strtok(trim(html_entity_decode(strip_tags((string) preg_replace('~<br\s*/?>|</p>~i', "\n", (string) ($m['message'] ?? $m['text'] ?? ''))))), "\n") ?: '';
             foreach ($this->inbox as $c) {
                 $lead = $this->leadById((string) ($c['leadId'] ?? ''));
                 $rep = array_values(array_filter($c['thread'], fn ($m) => str_ends_with($m['type'], 'Replied')));
@@ -305,16 +321,26 @@ final class MockLemlist
             $pg = max(1, (int) ($q['page'] ?? 1));
             return $ok(['data' => array_slice($data, ($pg - 1) * $per, $per), 'pagination' => ['totalItems' => count($data), 'currentPage' => $pg, 'totalPages' => (int) ceil(count($data) / $per)]]);
         }
-        if ($method === 'GET' && preg_match('~^/inbox/(ctc_[A-Za-z0-9]+)$~', $path, $m) && isset($this->rawThreads[$m[1]])) {
-            return $ok(['data' => $this->rawThreads[$m[1]], 'pagination' => ['totalItems' => count($this->rawThreads[$m[1]])]]);
-        }
         if ($method === 'GET' && preg_match('~^/inbox/(ctc_[A-Za-z0-9]+)$~', $path, $m)) {
-            if (!isset($this->inbox[$m[1]])) return $ok(['data' => [], 'pagination' => ['totalItems' => 0]]);
-            if (($q['markAsRead'] ?? '') === 'true') {
-                if (($q['userId'] ?? '') === '') return $ok(['error' => 'User ID is required to mark as read'], 400);
-                $this->inbox[$m[1]]['users'][0]['read'] = true;
+            // like live: newest first, paged with skip + limit; activities carry campaignId + leadId
+            if (isset($this->rawThreads[$m[1]])) {
+                $acts = $this->rawThreads[$m[1]];
+            } elseif (isset($this->inbox[$m[1]])) {
+                if (($q['markAsRead'] ?? '') === 'true') {
+                    if (($q['userId'] ?? '') === '') return $ok(['error' => 'User ID is required to mark as read'], 400);
+                    $this->inbox[$m[1]]['users'][0]['read'] = true;
+                }
+                $c = $this->inbox[$m[1]];
+                $lead = $this->leadById((string) ($c['leadId'] ?? ''));
+                $acts = array_map(fn ($a) => $a + ($lead ? ['campaignId' => $lead['campaignId'], 'leadId' => $lead['_id']] : []) + ($c['campaignId'] ?? null ? ['campaignId' => $c['campaignId'], 'leadId' => $c['campaignLeadId'] ?? ''] : []), $c['thread']);
+            } else {
+                return $ok(['data' => [], 'pagination' => ['totalItems' => 0, 'nextPage' => null]]);
             }
-            return $ok(['data' => $this->inbox[$m[1]]['thread'], 'pagination' => ['totalItems' => count($this->inbox[$m[1]]['thread'])]]);
+            usort($acts, fn ($a, $b) => strcmp((string) $b['createdAt'], (string) $a['createdAt']));
+            $skip = max(0, (int) ($q['skip'] ?? 0));
+            $lim = max(1, (int) ($q['limit'] ?? 10));
+            $data = array_slice($acts, $skip, $lim);
+            return $ok(['data' => $data, 'pagination' => ['totalItems' => count($acts), 'nextPage' => $skip + $lim < count($acts) ? intdiv($skip, $lim) + 2 : null]]);
         }
         if ($method === 'POST' && preg_match('~^/inbox/conversations/labels/(ctc_[A-Za-z0-9]+)$~', $path, $m)) {
             if (!isset($this->inbox[$m[1]])) return $ok(['error' => 'Inbox not found'], 404);
@@ -330,7 +356,7 @@ final class MockLemlist
             if ($path === '/inbox/email' && ($b['sendUserMailboxId'] ?? '') !== 'usm_mockmailbox1') return $ok(['error' => 'Invalid sendUserMailboxId'], 400);
             $this->sent[] = ['channel' => $path === '/inbox/email' ? 'email' : 'linkedin', 'contactId' => $ctc];
             if (isset($this->inbox[$ctc])) $this->inbox[$ctc]['thread'][] = ['_id' => 'act_r' . substr(md5((string) count($this->sent)), 0, 10), 'type' => $path === '/inbox/email' ? 'emailsSent' : 'linkedinSent',
-                'createdAt' => gmdate('Y-m-d\TH:i:s.000\Z'), 'message' => (string) $b['message'], 'sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins'];
+                'createdAt' => gmdate('Y-m-d\TH:i:s.000\Z'), ($path === '/inbox/email' ? 'message' : 'text') => (string) $b['message'], 'sendUserId' => self::USER, 'sendUserName' => 'Jonathan Perkins'];
             return $ok(['ok' => true, 'contactId' => $ctc]);
         }
         return null;

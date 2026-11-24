@@ -216,7 +216,7 @@ final class LemlistStore
 {
     public const KEEP_DAYS = 365;
     public const BATCH = 200;
-    private const SCHEMA = 3;
+    private const SCHEMA = 6;
     public ?\PDO $db;
     public readonly string $file;
     public readonly string $dir;
@@ -422,6 +422,12 @@ SQL);
         $this->db->exec('CREATE INDEX IF NOT EXISTS leads_contact ON leads (contact_id)');
         $this->db->exec('CREATE INDEX IF NOT EXISTS leads_email ON leads (email COLLATE NOCASE)');
         $this->db->exec('CREATE TABLE IF NOT EXISTS snippets (contact_id TEXT PRIMARY KEY, text TEXT, at TEXT, updated_at INTEGER)');
+        // inbox: each conversation's campaign + lead (from its activities; '' = no campaign), and campaign names of every status (daily)
+        $this->db->exec('CREATE TABLE IF NOT EXISTS contact_links (contact_id TEXT PRIMARY KEY, campaign_id TEXT, lead_id TEXT, checked_at INTEGER, company TEXT)');
+        $cols = array_column($this->db->query('PRAGMA main.table_info(contact_links)')->fetchAll(), 'name');
+        if (!in_array('company', $cols, true)) $this->db->exec('ALTER TABLE contact_links ADD COLUMN company TEXT');
+        $this->db->exec('CREATE TABLE IF NOT EXISTS campaign_names (id TEXT PRIMARY KEY, name TEXT, status TEXT, updated_at INTEGER)');
+        $this->db->exec('CREATE INDEX IF NOT EXISTS activities_contact ON activities (contact_id, created_at)');
         $cols = array_column($this->db->query('PRAGMA table_info(tasks)')->fetchAll(), 'name');
         if (!in_array('step_id', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN step_id TEXT');
         if (!in_array('seq_step', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN seq_step INTEGER');

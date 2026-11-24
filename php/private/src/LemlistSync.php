@@ -238,6 +238,7 @@ final class LemlistSync
                 } elseif ($phase === 'finish') {
                     $now = ($this->now)();
                     $this->store->setMeta('last_sync_at', $now);
+                    if ((int) $this->store->meta('campaign_names_at', 0) < $now - 86400) $this->syncCampaignNames($now);
                     if ((int) $this->store->meta('last_prune_at', 0) < $now - 86400) {
                         $this->store->prune($now);
                         $this->store->setMeta('last_prune_at', $now);
@@ -264,6 +265,27 @@ final class LemlistSync
             'step_id' => isset($a['stepId']) ? (string) $a['stepId'] : null, 'seq_step' => isset($a['sequenceStep']) ? (int) $a['sequenceStep'] : null,
             'total_seq_step' => isset($a['totalSequenceStep']) ? (int) $a['totalSequenceStep'] : null, 'created_at' => (string) ($a['createdAt'] ?? ''),
             'send_user_id' => isset($a['sendUserId']) ? (string) $a['sendUserId'] : null, 'source' => $source];
+    }
+
+    /** Names and statuses of every campaign (running, paused, ended, draft…), for the Inbox: once a day. */
+    public function syncCampaignNames(int $now): int
+    {
+        $n = 0;
+        for ($offset = 0; $offset < 5000; $offset += 100) {
+            $list = $this->client->get('/campaigns', ['version' => 'v2', 'limit' => 100, 'offset' => $offset]);
+            $items = is_array($list['campaigns'] ?? null) ? $list['campaigns'] : (array_is_list($list) ? $list : []);
+            $this->store->write(function () use ($items, $now, &$n) {
+                foreach ($items as $c) {
+                    if (!is_array($c) || !isset($c['_id'])) continue;
+                    $this->store->db->prepare('INSERT INTO campaign_names (id, name, status, updated_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, status = excluded.status, updated_at = excluded.updated_at')
+                        ->execute([(string) $c['_id'], mb_substr((string) ($c['name'] ?? ''), 0, 200), mb_substr((string) ($c['status'] ?? ''), 0, 40), $now]);
+                    $n++;
+                }
+            });
+            if (count($items) < 100) break;
+        }
+        $this->store->setMeta('campaign_names_at', $now);
+        return $n;
     }
 
     /** Main sequence steps (the "of N") plus condition-branch steps, with the text a manual step will send. */
