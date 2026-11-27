@@ -329,7 +329,7 @@ final class LemlistSync
                 'linkedin' => mb_substr($li, 0, 300), 'linkedin_key' => LinkedIn::profileKey($li), 'email' => mb_substr((string) ($l['email'] ?? ''), 0, 200),
                 'phone' => mb_substr((string) ($l['phone'] ?? ''), 0, 60), 'last_state' => (string) ($l['lastState'] ?? ''), 'status' => (string) ($l['status'] ?? ''),
                 'paused' => (int) $paused, 'added_at' => (string) ($l['createdAt'] ?? $l['addedAt'] ?? ''), 'updated_at' => ($this->now)(),
-                'fields' => LeadVars::pick($l, array_keys($vars))];
+                'fields' => LeadVars::all($l, array_keys($vars)), 'phones' => LeadSearch::otherPhones($l)];
             if ($row['contact_id'] === '') unset($row['contact_id']); // lemlist's export has no contactId: keep the one learned from tasks/activities/the inbox
             $this->store->upsertLead($row);
         });
@@ -407,6 +407,38 @@ final class LeadVars
         return $out ? json_encode($out, JSON_UNESCAPED_UNICODE) : null;
     }
 
+    /** lemlist's own lead fields: not variables (the lead card shows them as name, email, phone... or not at all). */
+    private const NOT_VARIABLES = ['_id', 'id', 'campaignid', 'contactid', 'firstname', 'lastname', 'email', 'phone', 'linkedinurl', 'companyname', 'jobtitle', 'state', 'statesystem',
+        'laststate', 'status', 'picture', 'companypicture', 'createdat', 'updatedat', 'addedat', 'ispaused', 'isexcluded', 'emailstatus', 'personalized'];
+    public const MAX_FIELDS = 120;
+
+    /**
+     * JSON of ALL the lead's variables and custom fields (call scripts, messages, Job URL, Position, location...): every scalar export key that is
+     * not one of lemlist's own fields, plus the step variables (same name matching as pick()). Values are capped at MAX_VALUE characters.
+     */
+    public static function all(array $lead, array $stepNames = []): ?string
+    {
+        $out = json_decode((string) self::pick($lead, $stepNames), true) ?: [];
+        foreach ($lead as $k => $v) {
+            if (!is_string($k) || !(is_string($v) || is_int($v) || is_float($v)) || count($out) >= self::MAX_FIELDS) continue;
+            $key = self::key($k);
+            if (in_array($key, self::NOT_VARIABLES, true) || isset(self::STANDARD[$key]) || array_key_exists($k, $out)) continue;
+            if (trim((string) $v) === '') continue;
+            $out[$k] = mb_substr((string) $v, 0, self::MAX_VALUE);
+        }
+        return $out ? json_encode($out, JSON_UNESCAPED_UNICODE) : null;
+    }
+
+    /** The value of the first of $names the stored fields have (names matched ignoring case and spaces), or null. */
+    public static function field(?array $leadRow, array $names): ?string
+    {
+        if (!$leadRow) return null;
+        $by = [];
+        foreach (json_decode((string) ($leadRow['fields'] ?? ''), true) ?: [] as $n => $val) if (is_string($val) && trim($val) !== '') $by[self::key((string) $n)] = trim($val);
+        foreach ($names as $n) if (isset($by[self::key($n)])) return $by[self::key($n)];
+        return null;
+    }
+
     /** Values for filling: the lead's standard fields plus its stored custom fields. */
     public static function values(?array $leadRow): array
     {
@@ -463,6 +495,7 @@ final class LemlistLinker
                 }
             }
         }
+        LeadSearch::indexSignals($store, $readTab);
         $out = ['linked' => 0, 'it' => 0, 'hr' => 0];
         $atlasCache = [];
         $upd = $store->db->prepare('UPDATE leads SET signal_track=?, signal_row=?, signal_company=?, signal_job_title=?, signal_role_group=?, signal_sub_group=?, signal_job_url=?, signal_approved_at=?, signal_date_found=?, atlas_pool=?, atlas_matching=? WHERE lead_id=?');

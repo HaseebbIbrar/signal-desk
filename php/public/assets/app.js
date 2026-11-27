@@ -1235,6 +1235,209 @@
         h("div", { class: "sd-k-vm-body" }, h("p", { class: "sd-k-script-text", text: vm.text }), h("div", null, copyBtn(vm.text))));
     }
     function resetCall() { st.ans = null; st.res = null; st.note = ""; st.cb = ""; st.attempt = newAttempt(); }
+
+    // ---------------------------------------------------------- lead search (every synced lead, every campaign) + lead card
+    var srch = { q: "", results: null, total: 0, loading: false, seq: 0, timer: null, live: null, card: null, cardLoading: false, form: null };
+    var searchInput = h("input", { id: "lead-search", type: "search", class: "sd-k-search", placeholder: "Search name, phone, company or email", autocomplete: "off", maxlength: "100", spellcheck: "false" });
+    searchInput.addEventListener("input", function () {
+      srch.q = searchInput.value; srch.live = null; srch.card = null;
+      clearTimeout(srch.timer);
+      if (srch.q.trim().length < 2) { srch.seq++; srch.results = null; srch.loading = false; render(); return; }
+      srch.timer = setTimeout(runSearch, 300); // results while typing, after a short pause
+    });
+    searchInput.addEventListener("keydown", function (e) { if (e.key === "Escape") { e.preventDefault(); clearSearch(); } });
+    function clearSearch() {
+      clearTimeout(srch.timer); srch.seq++;
+      searchInput.value = ""; srch.q = ""; srch.results = null; srch.loading = false; srch.live = null; srch.card = null; srch.cardLoading = false; srch.form = null;
+      render();
+    }
+    function runSearch() {
+      var my = ++srch.seq, q = srch.q.trim();
+      srch.loading = true; render();
+      api("/api/calls/search?q=" + encodeURIComponent(q)).then(function (r) {
+        if (my !== srch.seq) return;
+        srch.loading = false; srch.results = r.results; srch.total = r.total; render();
+      }, function (e) { if (my !== srch.seq) return; srch.loading = false; say("error", e.message); });
+    }
+    function searchLemlist() {
+      var q = srch.q.trim();
+      srch.live = { loading: true, results: null, source: null, error: null }; render();
+      api("/api/calls/searchLemlist?q=" + encodeURIComponent(q)).then(function (r) {
+        srch.live = { loading: false, results: r.results, source: r.source, error: null }; render();
+      }, function (e) { srch.live = { loading: false, results: null, source: null, error: e.message }; render(); });
+    }
+    function newForm() { return { open: false, ans: null, res: null, note: "", cb: "", attempt: newAttempt(), busy: false, last: null }; }
+    function openCard(id) {
+      srch.cardLoading = true; srch.card = null; srch.form = newForm(); render();
+      api("/api/calls/lead?id=" + encodeURIComponent(id)).then(function (c) { srch.cardLoading = false; srch.card = c; render(); },
+        function (e) { srch.cardLoading = false; say("error", e.message); });
+    }
+    // a live lemlist lead (not synced yet): read-only card from GET /leads; a synced one opens the full card
+    function openLive(x) {
+      if (x.inDb) { openCard(x.id); return; }
+      if (x.fields) { srch.form = null; srch.card = Object.assign({ live: true, calls: [], signal: null, otherPhones: [] }, x); render(); return; }
+      if (!x.email) { srch.form = null; srch.card = { live: true, contactOnly: true, name: x.name, title: x.title, company: x.company, phone: x.phone, linkedin: x.linkedin, fields: [], calls: [], otherPhones: [] }; render(); return; }
+      srch.cardLoading = true; render();
+      api("/api/calls/lemlistLeads?email=" + encodeURIComponent(x.email)).then(function (r) {
+        srch.cardLoading = false;
+        var local = r.results.filter(function (l) { return l.inDb; })[0];
+        if (local) { openCard(local.id); return; }
+        if (!r.results.length) { srch.card = { live: true, contactOnly: true, name: x.name, title: x.title, company: x.company, email: x.email, phone: x.phone, linkedin: x.linkedin, fields: [], calls: [], otherPhones: [] }; render(); return; }
+        srch.card = Object.assign({ live: true, calls: [], signal: null, otherPhones: [], others: r.results.slice(1) }, r.results[0]); render();
+      }, function (e) { srch.cardLoading = false; say("error", e.message); });
+    }
+    function jobBtn(job) {
+      var u = job && safeHref(job.url);
+      if (u) return h("a", { href: u, target: "_blank", rel: "noopener noreferrer", class: "sd-btn-link", title: "Job advert (" + job.from + ")", text: "Job advert" });
+      return h("span", { class: "sd-btn-link sd-btn-off", role: "link", "aria-disabled": "true", tabindex: "0", title: "No job link for this lead", text: "Job advert" });
+    }
+    function telOf(c) { return c.tel && /^tel:\+?[0-9]{4,20}$/.test(c.tel) ? c.tel : null; }
+    function searchBlock() {
+      var wrap = h("div", { class: "sd-k-search-wrap", role: "search", "aria-label": "Lead search" });
+      wrap.appendChild(h("label", { for: "lead-search", class: "sr-only", text: "Search name, phone, company or email" }));
+      wrap.appendChild(h("div", { class: "sd-k-search-row" }, searchInput,
+        srch.q ? h("button", { type: "button", class: "sd-btn sd-btn-sm", onclick: clearSearch, text: "Clear", title: "Esc clears" }) : null));
+      if (srch.card || srch.cardLoading) { wrap.appendChild(leadCardView()); return wrap; }
+      var q = srch.q.trim();
+      if (q.length < 2) return wrap;
+      if (!srch.results) { wrap.appendChild(h("p", { class: "sd-o-loading" }, h("span", { class: "sd-spinner" }), " Searching…")); return wrap; }
+      var list = h("div", { class: "sd-k-slist", role: "list", "aria-label": "Matching leads" });
+      srch.results.forEach(function (x) {
+        list.appendChild(h("button", { type: "button", role: "listitem", class: "sd-k-srow", onclick: function () { openCard(x.id); } },
+          h("span", { class: "sd-o-strong", text: x.name }),
+          h("span", { class: "sd-muted sd-o-small13", text: [x.title, x.company].filter(Boolean).join(" · ") || "—" }),
+          h("span", { class: "sd-o-small13", text: (x.campaign || "No campaign") + (x.campaignStatus && x.campaignStatus !== "running" ? " (" + x.campaignStatus + ")" : "") }),
+          h("span", { class: "sd-o-small13 sd-k-snum", text: x.phone || "No phone" })));
+      });
+      if (srch.results.length) {
+        wrap.appendChild(h("p", { class: "sd-muted sd-o-small", "aria-live": "polite", text: srch.total > srch.results.length ? "Showing " + srch.results.length + " of " + srch.total + " leads: type more to narrow it down." : srch.total + (srch.total === 1 ? " lead" : " leads") + " in the local database (all campaigns)." }));
+        wrap.appendChild(list);
+      } else {
+        wrap.appendChild(h("p", { class: "sd-k-empty sd-muted", "aria-live": "polite", text: "No lead in the local database matches \"" + q + "\"." + (srch.loading ? " Searching…" : "") }));
+        if (!srch.live) wrap.appendChild(h("button", { type: "button", class: "sd-k-linkbtn", onclick: searchLemlist, text: "Search lemlist", title: "Live, read-only lookup in lemlist by email or name" }));
+      }
+      if (srch.live) wrap.appendChild(liveBlock());
+      return wrap;
+    }
+    function liveBlock() {
+      var lv = srch.live, box = h("div", { class: "sd-k-live", "aria-live": "polite" }, h("span", { class: "sd-k-eyebrow", text: "lemlist (live, read-only)" }));
+      if (lv.loading) { box.appendChild(h("p", { class: "sd-o-loading" }, h("span", { class: "sd-spinner" }), " Asking lemlist…")); return box; }
+      if (lv.error) { box.appendChild(h("p", { class: "sd-k-empty sd-muted", text: lv.error })); return box; }
+      if (!lv.results.length) { box.appendChild(h("p", { class: "sd-k-empty sd-muted", text: "Not found in lemlist either." })); return box; }
+      var list = h("div", { class: "sd-k-slist", role: "list" });
+      lv.results.forEach(function (x) {
+        var camp = x.campaign ? x.campaign.name + (x.campaign.status && x.campaign.status !== "running" ? " (" + x.campaign.status + ")" : "") : (x.campaigns ? x.campaigns + (x.campaigns === 1 ? " campaign" : " campaigns") : "");
+        list.appendChild(h("button", { type: "button", role: "listitem", class: "sd-k-srow", onclick: function () { openLive(x); } },
+          h("span", { class: "sd-o-strong", text: x.name }), h("span", { class: "sd-muted sd-o-small13", text: [x.title, x.company].filter(Boolean).join(" · ") || "—" }),
+          h("span", { class: "sd-o-small13", text: camp || "—" }), h("span", { class: "sd-o-small13 sd-k-snum", text: x.phone || "No phone" })));
+      });
+      box.appendChild(list);
+      return box;
+    }
+    function leadCardView() {
+      var box = h("div", { class: "sd-k-card", role: "region", "aria-label": "Lead card" });
+      if (srch.cardLoading) { box.appendChild(h("p", { class: "sd-o-loading" }, h("span", { class: "sd-spinner" }), " Opening the lead…")); return box; }
+      var c = srch.card, tel = telOf(c), li = safeHref(c.linkedin);
+      box.appendChild(h("div", { class: "sd-o-between" },
+        h("div", { class: "sd-o-stack-xxs sd-o-gap4" }, h("span", { class: "sd-k-eyebrow", text: c.live ? "Lead in lemlist (not synced here yet)" : "Lead" }), h("span", { class: "sd-k-name", text: c.name }),
+          h("span", { class: "sd-muted sd-o-small13", text: [c.title, c.company].filter(Boolean).join(" · ") })),
+        h("button", { type: "button", class: "sd-btn sd-btn-sm", onclick: function () { srch.card = null; srch.form = null; render(); searchInput.focus(); }, text: srch.results ? "Back to results" : "Close" })));
+      var info = h("dl", { class: "sd-k-dl" });
+      var row = function (k, v, copy) { if (!v) return; info.appendChild(h("dt", { text: k })); info.appendChild(h("dd", null, h("span", { text: v }), copy ? copyBtn(v) : null)); };
+      row("Email", c.email, true);
+      row("Phone", c.phone, true);
+      (c.otherPhones || []).forEach(function (p, i) { row("Phone " + (i + 2), p, true); });
+      if (c.campaign) row("Campaign", c.campaign.name + (c.campaign.status ? " · " + c.campaign.status : ""));
+      if (!c.contactOnly) row("Lead status", [c.leadStatus, c.paused ? "paused" : "", c.lemlistState].filter(Boolean).join(" · "));
+      if (c.step && c.step.total) row("Current step", c.step.label || (c.step.n + "/" + c.step.total));
+      box.appendChild(info);
+      var acts = h("div", { class: "sd-o-wrap" },
+        tel ? h("a", { href: tel, class: "sd-k-callbtn", text: "Call " + c.phone }) : h("span", { class: "sd-k-nophone sd-muted", text: "No phone number in lemlist" }),
+        li ? h("a", { href: li, target: "_blank", rel: "noopener noreferrer", class: "sd-btn-link", text: "LinkedIn" }) : null,
+        jobBtn(c.jobUrl));
+      var ro = c.live || st.data.viewOnly || !st.data.statuses.callsApi;
+      if (!c.live) {
+        var lb = btn(srch.form && srch.form.open ? "Hide the call form" : "Log a call", null, function () { if (!srch.form) srch.form = newForm(); srch.form.open = !srch.form.open; render(); });
+        if (ro) { lb.disabled = true; lb.title = st.data.viewOnly ? "View only" : "Calls API needs Email Pro+"; }
+        acts.appendChild(lb);
+      }
+      box.appendChild(acts);
+      if (c.live) box.appendChild(h("p", { class: "sd-muted sd-o-small", text: "Read from lemlist just now; it appears here after the next sync. Log a call works once it is synced (or log it in lemlist)." }));
+      if (srch.form && srch.form.open && !c.live) box.appendChild(cardForm(c, ro));
+      if (c.signal) {
+        var s = c.signal, sj = safeHref(s.jobUrl);
+        box.appendChild(h("div", { class: "sd-k-sig" }, h("span", { class: "sd-k-eyebrow", text: "Signal (" + s.match + ")" }),
+          h("span", { class: "sd-o-small13", text: [s.track, s.jobTitle, s.company, s.roleGroup, s.dateFound ? "found " + s.dateFound : "", s.tab + " row " + s.row].filter(Boolean).join(" · ") }),
+          sj ? h("a", { href: sj, target: "_blank", rel: "noopener noreferrer", class: "sd-o-small13", text: sj }) : null));
+      }
+      box.appendChild(h("h3", { class: "sd-k-h3", text: "Call history" }));
+      if (!c.calls.length) box.appendChild(h("p", { class: "sd-muted sd-o-small13", text: c.live ? "Not synced yet." : "No calls logged yet." }));
+      else box.appendChild(h("ul", { class: "sd-k-hist" }, c.calls.map(function (x) {
+        return h("li", { class: "sd-k-hrow" }, h("span", { class: "sd-o-small13 sd-o-strong", text: whenLong(x.at) + " · " + x.outcome + (x.callback ? " · call back " + x.callback : "") }),
+          h("span", { class: "sd-muted sd-o-small", text: [x.campaign, x.source === "lemlist" ? "in lemlist" : (x.by ? "by " + x.by : "")].filter(Boolean).join(" · ") }),
+          x.note ? h("span", { class: "sd-k-hnote", text: x.note }) : null);
+      })));
+      box.appendChild(h("h3", { class: "sd-k-h3", text: "Lead variables (" + c.fields.length + ")" }));
+      if (!c.fields.length) box.appendChild(h("p", { class: "sd-muted sd-o-small13", text: "No variables or custom fields on this lead." }));
+      c.fields.forEach(function (f) {
+        box.appendChild(h("div", { class: "sd-k-var" }, h("div", { class: "sd-o-between" }, h("span", { class: "sd-k-script-label", text: f.name }), copyBtn(f.value)),
+          h("p", { class: "sd-k-var-text", text: f.value })));
+      });
+      if (c.others && c.others.length) box.appendChild(h("p", { class: "sd-muted sd-o-small", text: "Also in: " + c.others.map(function (o) { return o.campaign.name; }).join(", ") }));
+      return box;
+    }
+    // the same outcome / note / call-back steps as Now calling; logs the call on the lead (POST /calls {leadId}), no task
+    function cardForm(c, ro) {
+      var f = srch.form, d = st.data, box = h("div", { class: "sd-k-now sd-k-cardform", role: "group", "aria-label": "Log a call" });
+      box.appendChild(h("span", { class: "sd-k-step", text: "1. Did they answer?" }));
+      var a1 = btn("Answered", f.ans === true, function () { f.ans = true; f.res = null; render(); }), a2 = btn("Not answered", f.ans === false, function () { f.ans = false; f.res = null; render(); });
+      if (ro) { a1.disabled = true; a2.disabled = true; }
+      box.appendChild(h("div", { class: "sd-o-wrap" }, a1, a2));
+      var opts = f.ans === null ? [] : (f.ans ? d.statuses.answered : d.statuses.notAnswered);
+      if (f.ans !== null) {
+        box.appendChild(h("span", { class: "sd-k-step", text: "2. Outcome" }));
+        box.appendChild(h("div", { class: "sd-o-wrap", role: "group", "aria-label": "Outcome" }, opts.map(function (o) {
+          var b = btn(o.label, f.res === o.key, function () { f.res = o.key; render(); });
+          b.title = [o.positive ? "marks the lead interested" : "", o.negative ? "marks the lead not interested" : "", o.pauses ? "pauses the campaign" : ""].filter(Boolean).join(", ");
+          if (ro) b.disabled = true;
+          return b;
+        })));
+      }
+      box.appendChild(h("label", { for: "card-note", class: "sd-k-step", text: "3. Note (goes to lemlist)" }));
+      var note = h("textarea", { id: "card-note", rows: "3", class: "sd-k-textarea", placeholder: "e.g. Called back about the Data Architect, wants CVs Friday", maxlength: "2000" });
+      note.value = f.note;
+      note.addEventListener("input", function () { f.note = note.value; });
+      box.appendChild(note);
+      var tomorrow = new Date(Date.now() + 86400000);
+      var cb = h("input", { id: "card-callback", type: "date", class: "sd-k-date", min: tz(tomorrow, { year: "numeric" }) + "-" + tz(tomorrow, { month: "2-digit" }) + "-" + tz(tomorrow, { day: "2-digit" }) });
+      cb.value = f.cb;
+      cb.addEventListener("change", function () { f.cb = cb.value; render(); });
+      box.appendChild(h("div", { class: "sd-o-wrap" }, h("label", { for: "card-callback", class: "sd-muted sd-o-small13", text: "Call back on" }), cb));
+      var save = h("button", { type: "button", class: "sd-k-save", onclick: function () { saveLeadCall(c); }, text: f.busy ? "Saving…" : f.res ? "Save call on this lead" : "Pick an outcome first" });
+      if (!f.res || f.busy || ro) save.disabled = true;
+      box.appendChild(save);
+      box.appendChild(h("span", { class: "sd-muted sd-o-small", text: "Logs the call on the lead in lemlist (no task is completed or moved)" + (f.cb ? "; the call-back date becomes an Atlas task when Atlas writes are on" : "") + (f.note ? "; the note also goes to Atlas when Atlas writes are on" : "") + "." }));
+      if (f.last) box.appendChild(h("ul", { class: "sd-k-results", "aria-live": "polite", "aria-label": "Saved to" }, [h("li", { class: "sd-k-results-head", text: "Last save:" })].concat(f.last.map(function (x) {
+        return h("li", { class: "sd-k-result " + (x.ok === true ? "sd-k-result-ok" : x.ok === false ? "sd-k-result-err" : "sd-k-result-info"), text: x.text });
+      }))));
+      return box;
+    }
+    function saveLeadCall(c) {
+      var f = srch.form;
+      if (!f || !f.res || f.busy) return;
+      f.busy = true; render();
+      api("/api/calls/logLead", { method: "POST", body: { leadId: c.id, attempt: f.attempt, answered: f.ans, status: f.res, note: f.note, callbackDate: f.cb } }).then(function (r) {
+        f.busy = false;
+        if (r.results) f.last = r.results;
+        if (r.ok === false) { st.msg = { kind: "error", text: r.message }; render(); return; } // same attempt: Save again sends nothing twice
+        if (r.preview) { st.msg = { kind: "warn", text: previewText(r) }; render(); return; }
+        if (r.card) srch.card = r.card;
+        if (r.today) st.data.today = r.today;
+        var last = f.last;
+        srch.form = newForm(); srch.form.last = last;
+        st.msg = { kind: "ok", text: r.message }; render();
+      }, function (e) { f.busy = false; say("error", e.message); });
+    }
     // ---------------------------------------------------------- title (the sub-tabs are the pill row under the top bar)
     function header() {
       return h("div", { class: "sd-o-titlebar" }, h("h1", { class: "sd-o-h1", text: st.sub === "inbox" ? "Inbox" : "SDR desk" }));
@@ -1278,7 +1481,7 @@
             h("span", { class: "sd-muted sd-o-small13", text: "Synced from lemlist Tasks. Logging the outcome here completes the task in lemlist and moves the lead to its next step." })),
           h("div", { class: "sd-o-wrap" }, h("span", { class: "sd-muted sd-o-small13" }, "Done today: ", h("strong", { class: "sd-k-strong", text: String(t.done) }), " · answered " + t.answered + " · positive " + t.positive),
             h("label", { for: "owner", class: "sr-only", text: "Caller" }), callerSel)),
-        h("div", { class: "sd-k-body" }, list, nowCalling(cur)));
+        searchBlock(), h("div", { class: "sd-k-body" }, list, nowCalling(cur)));
     }
     function nowCalling(cur) {
       var d = st.data;
@@ -1304,7 +1507,7 @@
       if (vb) box.appendChild(vb);
       box.appendChild(h("div", { class: "sd-o-wrap" },
         tel ? h("a", { href: tel, class: "sd-k-callbtn", text: "Call " + c.phone }) : h("span", { class: "sd-k-nophone sd-muted", text: "No phone number in lemlist" }),
-        li ? h("a", { href: li, target: "_blank", rel: "noopener noreferrer", class: "sd-btn-link", text: "LinkedIn" }) : null));
+        li ? h("a", { href: li, target: "_blank", rel: "noopener noreferrer", class: "sd-btn-link", text: "LinkedIn" }) : null, jobBtn(c.jobUrl)));
       var ro = d.viewOnly || !d.statuses.callsApi;
       box.appendChild(h("span", { class: "sd-k-step", text: "1. Did they answer?" }));
       var a1 = btn("Answered", st.ans === true, function () { st.ans = true; st.res = null; render(); }), a2 = btn("Not answered", st.ans === false, function () { st.ans = false; st.res = null; render(); });

@@ -33,7 +33,7 @@ final class LemlistGuard
         '/v2/campaigns/{id}/stats' => '#^/v2/campaigns/' . self::ID . '/stats$#',
         '/v2/campaigns/{id}/export/leads' => '#^/v2/campaigns/' . self::ID . '/export/leads$#',
         '/activities' => '#^/activities$#', '/v2/tasks' => '#^/v2/tasks$#', '/call-statuses' => '#^/call-statuses$#',
-        '/calls/{id}' => '#^/calls/' . '[A-Za-z0-9_.:-]{3,128}' . '$#', '/leads' => '#^/leads$#',
+        '/calls/{id}' => '#^/calls/' . '[A-Za-z0-9_.:-]{3,128}' . '$#', '/leads' => '#^/leads$#', '/v2/contacts' => '#^/v2/contacts$#',
         '/inbox' => '#^/inbox$#', '/inbox/labels' => '#^/inbox/labels$#', '/inbox/{id}' => '#^/inbox/' . self::ID . '$#',
         '/hooks' => '#^/hooks$#',
     ];
@@ -218,7 +218,7 @@ final class LemlistStore
 {
     public const KEEP_DAYS = 365;
     public const BATCH = 200;
-    private const SCHEMA = 7;
+    private const SCHEMA = 8;
     public ?\PDO $db;
     public readonly string $file;
     public readonly string $dir;
@@ -433,12 +433,21 @@ SQL);
         $cols = array_column($this->db->query('PRAGMA table_info(tasks)')->fetchAll(), 'name');
         if (!in_array('step_id', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN step_id TEXT');
         if (!in_array('seq_step', $cols, true)) $this->db->exec('ALTER TABLE tasks ADD COLUMN seq_step INTEGER');
+        // lead search (Calls tab): the lead's other phone numbers (phone1-4), and the workbook's signals by company + job title (the Job advert fallback)
+        $cols = array_column($this->db->query('PRAGMA main.table_info(leads)')->fetchAll(), 'name');
+        if (!in_array('phones', $cols, true)) $this->db->exec('ALTER TABLE leads ADD COLUMN phones TEXT');
+        $this->db->exec('CREATE TABLE IF NOT EXISTS signal_jobs (company_key TEXT, title_key TEXT, company TEXT, job_title TEXT, job_url TEXT, track TEXT, tab TEXT, row INTEGER,
+            date_found TEXT, role_group TEXT)');
+        $this->db->exec('CREATE INDEX IF NOT EXISTS signal_jobs_key ON signal_jobs (company_key, title_key)');
         // app-only data (not re-syncable from lemlist) lives in lemlist-app.sqlite: the call log (idempotency) and outcomes
         $this->db->exec('CREATE TABLE IF NOT EXISTS app.calls (external_id TEXT PRIMARY KEY, lemlist_id TEXT, task_id TEXT, lead_id TEXT, user_id TEXT, by_user TEXT, call_status TEXT,
             started_at TEXT, created_at INTEGER, answered INTEGER, task_done INTEGER, callback_at TEXT, kind TEXT)');
         $this->db->exec('CREATE TABLE IF NOT EXISTS app.outcomes (lead_id TEXT PRIMARY KEY, outcome TEXT, by_user TEXT, at INTEGER)');
         // what one call save already did in Atlas (so "Save again" never sends twice): the person note and the task
         $this->db->exec('CREATE TABLE IF NOT EXISTS app.call_sync (external_id TEXT PRIMARY KEY, atlas_note TEXT, atlas_task TEXT, at INTEGER)');
+        // the lead card's call history shows each call's note (kept here with the call, pruned with it after 12 months)
+        $cols = array_column($this->db->query('PRAGMA app.table_info(calls)')->fetchAll(), 'name');
+        if (!in_array('note', $cols, true)) $this->db->exec('ALTER TABLE app.calls ADD COLUMN note TEXT');
         foreach (['calls', 'outcomes'] as $t) { // moved from lemlist.sqlite (before 2026-11-17)
             if (!$this->one("SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = ?", [$t])) continue;
             $have = array_column($this->db->query("PRAGMA main.table_info($t)")->fetchAll(), 'name');

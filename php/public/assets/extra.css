@@ -546,3 +546,37 @@ button.sd-o-action:hover { background: #33224f; }
 .sd-k-result-err { color: var(--sd-bnc); }
 .sd-k-result-info { color: var(--sd-muted); }
 
+/* Calls tab: lead search + lead card, Job advert button */
+.sd-btn-off, .sd-o-body .sd-btn-off { box-sizing: content-box; display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 999px;
+  border: 1px dashed var(--sd-control-border); color: var(--sd-muted); opacity: 0.6; cursor: not-allowed; font-size: 14px; }
+.sd-k-search-wrap { display: flex; flex-direction: column; gap: 10px; }
+.sd-k-search-row { display: flex; gap: 8px; align-items: center; }
+.sd-k-search { box-sizing: border-box; flex: 1 1 auto; min-width: 0; min-height: 48px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--sd-control-border);
+  background: var(--sd-page); color: var(--sd-text); font-family: inherit; font-size: 16px; }
+.sd-k-search:focus { outline: none; border-color: var(--sd-link); }
+.sd-k-slist { display: flex; flex-direction: column; border: 1px solid var(--sd-divider); border-radius: 12px; overflow: hidden; }
+.sd-k-srow { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) minmax(0, 1.4fr) minmax(0, 1fr); gap: 12px; align-items: center; text-align: left; padding: 10px 14px;
+  border: 0; border-bottom: 1px solid var(--sd-divider); background: transparent; color: var(--sd-text); cursor: pointer; min-height: 48px; font-family: inherit; font-size: 15px; }
+.sd-k-srow:last-child { border-bottom: 0; }
+.sd-k-srow:hover, .sd-k-srow:focus-visible { background: var(--sd-hover); outline: none; }
+.sd-k-snum { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sd-k-linkbtn { align-self: flex-start; border: 0; background: transparent; color: var(--sd-link); font-family: inherit; font-size: 14px; text-decoration: underline; cursor: pointer; padding: 4px 0; min-height: 32px; }
+.sd-k-linkbtn:hover { color: var(--sd-link-hover); }
+.sd-k-live { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; border: 1px dashed var(--sd-control-border); }
+.sd-k-card { background: var(--sd-deep); border: 1px solid var(--sd-accent); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.sd-k-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; align-items: center; margin: 0; font-size: 14px; }
+.sd-k-dl dt { color: var(--sd-muted); }
+.sd-k-dl dd { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; word-break: break-word; }
+.sd-k-h3 { margin: 6px 0 0; font-size: 15px; font-weight: 700; }
+.sd-k-sig { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--sd-card-border); border-left: 4px solid var(--sd-signal); word-break: break-all; }
+.sd-k-hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--sd-divider); border-radius: 10px; }
+.sd-k-hrow { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-bottom: 1px solid var(--sd-divider); }
+.sd-k-hrow:last-child { border-bottom: 0; }
+.sd-k-hnote { font-size: 13px; white-space: pre-line; color: #e7dcf7; }
+.sd-k-var { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--sd-page); border: 1px solid var(--sd-divider); }
+.sd-k-var-text { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-line; word-break: break-word; color: var(--sd-text); }
+.sd-k-cardform { border-color: var(--sd-call); }
+@media (max-width: 640px) {
+  .sd-k-srow { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .sd-k-dl { grid-template-columns: minmax(0, 1fr); }
+}

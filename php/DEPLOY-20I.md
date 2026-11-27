@@ -526,6 +526,24 @@ When you save a call in the Calls tab:
 - **The Atlas API key needs read-write scope** for this (Atlas: Settings -> Developers -> API keys). A read-only key is not worked around: the first save shows "Atlas refused the write ... cannot write".
 - Only these two Atlas writes exist in the code (`AtlasGuard`); any other Atlas write (edits, deletes, lists, stages, new people) is refused before a request is made.
 
+## Calls tab: Job advert button and lead search (since 27 Nov 2026)
+
+**Job advert** (next to LinkedIn in "Now calling" and on the lead card) opens the job ad in a new tab. Where the link comes from, in order:
+
+1. the lead's lemlist variable **`Job URL`** (the live campaigns use this name; `jobUrl`, `Job Link` and `jobLink` would also work), then **`Source URL`**;
+2. otherwise the matching signal in Signal Desk: the Decision Makers / HR Decision Makers row the lead is linked to (by LinkedIn), else the one workbook signal (Decision Makers, HR Decision Makers, verify tab, Hr signals, Signals) with the **same company and job title** (the lead's `Position` variable, else its title; case, accents, legal forms like NV/BV/SRL/ApS and "(m/f/x)" are ignored). Two different adverts for the same company + title = no link.
+
+No link: the button is greyed out with the tooltip "No job link for this lead". Read-only: the URL is never written anywhere. The signal index (`signal_jobs` table) is rebuilt by the cron's linking step from the workbook (read-only).
+
+**Lead search** (top of Calls tab, "Search name, phone, company or email") searches **every lead in the local database**: all campaigns (running, paused, ended), done leads and leads without tasks, not only today's queue. Results appear from 2 characters (300 ms after you stop typing); **Esc** clears.
+
+- **Phones:** spaces, dashes, dots, brackets and the prefix are ignored and the last 9 digits are compared: `+32 470 12 34 56`, `0032470123456` and `0470123456` all match. A Belgian landline (8 digits, `02 555 01 01`) matches too. `phone1`-`phone4` are searched as well. Fewer than 8 digits = part of a number.
+- **Names, company, email:** accents and case are ignored (`Sørensen` = `sorensen`, `Dupré` = `dupre`); several words must all match (e.g. `elodie cafe`).
+- **Lead card** (click a result): name, title, company, email, phone(s) with Copy, Call, LinkedIn, Job advert; campaign + status, lead status, current step; **all lead variables and custom fields** (call scripts, email and LinkedIn messages, Position, location...) each with Copy; the call history (every call logged here with date, outcome and note, plus lemlist's own call activities, newest first, also from the person's other campaigns); the original signal if one matches.
+- **Log a call** on the card (inbound call-backs): the same answered / outcome / note / call-back steps. It logs the call **on the lead** (`POST /calls {leadId}`, no task: nothing is completed, moved or created in lemlist), through the same guard, `LEMLIST_WRITES` switch, rate limit, idempotency and audit log (ids only) as every call. The note and call-back date go to Atlas exactly as in "Now calling" (person note; the call-back date becomes the Atlas task, because there is no lemlist task to move).
+- **Not in the local database yet:** "Search lemlist" under empty results does a live, read-only lookup: an email uses `GET /leads?email=` (every campaign of that person, with variables), anything else `GET /v2/contacts?search=`. Nothing is stored; the lead shows up locally after the next sync.
+- **Since this version** the sync stores all of a lead's variables (not only the ones the steps use) and its other phones; the next cron run refreshes the leads of every **running** campaign (schema 8, automatic). Leads of campaigns that had already stopped before this upload keep what was stored then (only the variables their steps used, so usually no `Job URL`: their Job advert falls back to the signal); "Search lemlist" shows their full variables live.
+
 ## What the app writes
 
 | Tab | Allowed writes |

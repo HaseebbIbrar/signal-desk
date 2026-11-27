@@ -237,6 +237,10 @@ final class App
                     'calls/inbox' => $this->calls($user['email'])->inbox(self::str($_GET['filter'] ?? 'all', 20), self::str($_GET['q'] ?? '', 100), max(1, min(200, (int) ($_GET['page'] ?? 1))), max(1, min(500, (int) ($_GET['per'] ?? CallDesk::PAGE_SIZE)))),
                     'calls/thread' => $this->calls($user['email'])->thread(self::str($_GET['contactId'] ?? '', 64), max(0, min(5000, (int) ($_GET['skip'] ?? 0)))),
                     'calls/updates' => $this->calls($user['email'])->updates(),
+                    'calls/search' => $this->calls($user['email'])->searchLeads(self::str($_GET['q'] ?? '', 100)),
+                    'calls/lead' => $this->calls($user['email'])->leadCard(self::str($_GET['id'] ?? '', 64)),
+                    'calls/searchLemlist' => $this->calls($user['email'])->searchLemlist(self::str($_GET['q'] ?? '', 100)),
+                    'calls/lemlistLeads' => $this->calls($user['email'])->lemlistLeads(self::str($_GET['email'] ?? '', 200)),
                     'inbox/unread' => $this->calls($user['email'])->unread(),
                     'atlas/search' => $this->requireAtlas()->search(
                         self::str($_GET['title'] ?? ''), self::str($_GET['sub'] ?? ''), self::str($_GET['group'] ?? ''),
@@ -291,6 +295,7 @@ final class App
                 'outreach/outcome' => $this->outreach()->setOutcome($body['leadId'] ?? null, $body['outcome'] ?? null, $user['email']),
                 'outreach/selection' => $this->outreachSelection($body, $user['email']),
                 'calls/log' => $this->calls($user['email'])->logCall($body),
+                'calls/logLead' => $this->calls($user['email'])->logLeadCall($body),
                 'calls/task' => $this->calls($user['email'])->taskAction($body),
                 'calls/reply' => $this->calls($user['email'])->reply($body),
                 'calls/label' => $this->calls($user['email'])->label($body),

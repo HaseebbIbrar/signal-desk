@@ -33,6 +33,21 @@ final class MockLemlist
         ['_id' => 'cam_old00001', 'name' => 'Old test', 'status' => 'paused', 'sequenceId' => 'seq_old', 'createdAt' => '2026-01-02T08:00:00Z'],
     ];
 
+    /** Test / demo helper: a campaign (IT sequence) with the given leads ([_id, firstName, lastName, companyName, jobTitle, phone, email, + variables]). */
+    public function addCampaign(string $id, string $name, string $status, array $leads): void
+    {
+        $this->campaigns[] = ['_id' => $id, 'name' => $name, 'status' => $status, 'sequenceId' => 'seq_' . $id, 'createdAt' => '2026-03-01T08:00:00Z'];
+        $this->sequences[$id] = $this->sequences['cam_it000001'];
+        $this->leads[$id] = array_map(fn ($l) => $l + ['campaignId' => $id, 'contactId' => 'ctc_' . substr($l['_id'], 4), 'lastState' => 'contacted', 'status' => 'done',
+            'linkedinUrl' => '', 'createdAt' => '2026-03-02T09:00:00.000Z'], $leads);
+    }
+
+    /** Test / demo helper: a campaign's status (e.g. ended after its leads were synced). */
+    public function setCampaignStatus(string $id, string $status): void
+    {
+        foreach ($this->campaigns as $i => $c) if ($c['_id'] === $id) $this->campaigns[$i]['status'] = $status;
+    }
+
     /** Test helper: a copy of a campaign's sequences and leads under a new id. */
     public function cloneCampaign(string $from, string $id, string $name, string $status = 'running'): void
     {
@@ -75,9 +90,10 @@ final class MockLemlist
         $scripts = [
             'lea_it01' => ['Touch 1 Call' => "Hi {{firstName}}, Jonathan from SwooScale. I saw Example MSSP is hiring a Business Analyst.\nWe have 3 analysts in Belgium available within a month. Worth a short chat?",
                 'Call-again' => 'Hi Ciso, Jonathan again: following up on the Business Analyst role.', 'Touch 2 mail' => 'Hi Ciso, Jonathan from SwooScale here. Call me back on 0470 12 34 56.',
-                'Final call' => 'Last try, Ciso: shall I send two profiles?', 'Internal note' => 'not used by any step'],
+                'Final call' => 'Last try, Ciso: shall I send two profiles?', 'Internal note' => 'not used by any step',
+                'Job URL' => 'https://www.linkedin.com/jobs/view/4400000001/', 'Position' => 'Business Analyst', 'location' => 'Brussels, Belgium', 'phone1' => '+32 2 555 01 01'],
             'lea_it02' => ['Touch 1 Call' => 'Hi Robin, Jonathan here.', 'Call-again' => "Hi Robin, Jonathan from SwooScale calling again.\nYou mentioned the Head of IT search: any update?",
-                'Touch 2 mail' => 'Robin, Jonathan from SwooScale. I will email you two profiles.'],
+                'Touch 2 mail' => 'Robin, Jonathan from SwooScale. I will email you two profiles.', 'Source URL' => 'https://careers.replier.example/jobs/head-of-it-123'],
             'lea_it04' => ['Touch 1 Call' => '', 'Call-again' => ''],
             'lea_it05' => ['Final call' => 'Hi Mia, final call from Jonathan about the IT Director search.'],
             'lea_hr01' => ['Touch 1 Call' => 'Hi Kim, Jonathan from SwooScale. Your HR team is hiring: can we help with IT profiles?'],
@@ -233,6 +249,11 @@ final class MockLemlist
     public function persist(string $file): void
     {
         $this->addDemoContacts();
+        // lead search demo: accents, phone formats, a lead without a job link and without tasks
+        $this->addCampaign('cam_end00001', 'Spring outreach', 'running', [
+            ['_id' => 'lea_en01', 'firstName' => 'Søren', 'lastName' => 'Sørensen', 'companyName' => 'Nordisk Data ApS', 'jobTitle' => 'CTO', 'phone' => '+32 470 12 34 56',
+                'email' => 's.sorensen@nordisk.example', 'Position' => 'Data Engineer', 'Touch 1 Call' => 'Hi Søren, Jonathan from SwooScale. Is the Data Engineer role still open?'],
+            ['_id' => 'lea_en02', 'firstName' => 'Élodie', 'lastName' => 'Dupré', 'companyName' => 'Café Tech SRL', 'jobTitle' => 'IT Manager', 'phone' => '(0)4 71-98.76.54', 'email' => 'elodie@cafetech.example']]);
         $this->stateFile = $file;
         $d = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
         if (is_array($d)) foreach (['tasks', 'callLog', 'inbox', 'labels', 'sent'] as $k) if (isset($d[$k]) && is_array($d[$k])) $this->$k = $d[$k];
@@ -419,6 +440,30 @@ final class MockLemlist
             return $ok(['results' => $items, 'total' => count($f), 'limit' => $limit, 'page' => $page]);
         }
         if ($method === 'GET' && $path === '/hooks') return $ok(array_values($this->hooks));
+        if ($method === 'GET' && $path === '/leads') { // GET /leads?email=&version=v2: every campaign's lead for that email, variables inside
+            $out = [];
+            foreach ($this->leads as $cid => $rows) foreach ($rows as $l) {
+                if (strcasecmp((string) ($l['email'] ?? ''), (string) ($q['email'] ?? '')) !== 0) continue;
+                $camp = array_values(array_filter($this->campaigns, fn ($c) => $c['_id'] === $cid))[0] ?? ['_id' => $cid, 'name' => '', 'status' => ''];
+                $out[] = ['_id' => $l['_id'], 'contactId' => $l['contactId'] ?? null, 'state' => $l['lastState'] ?? '', 'status' => $l['status'] ?? '', 'isPaused' => ($l['status'] ?? '') === 'paused',
+                    'variables' => array_diff_key($l, ['_id' => 1, 'campaignId' => 1, 'contactId' => 1, 'lastState' => 1, 'status' => 1, 'createdAt' => 1]),
+                    'campaign' => ['id' => $cid, 'name' => $camp['name'], 'status' => $camp['status']]];
+            }
+            return $out ? $ok($out) : $ok(['error' => 'Lead not found'], 404);
+        }
+        if ($method === 'GET' && $path === '/v2/contacts') { // GET /v2/contacts?search=: name / email / phone
+            $s = strtolower(trim((string) ($q['search'] ?? '')));
+            $seen = $out = [];
+            foreach ($this->leads as $rows) foreach ($rows as $l) {
+                $c = (string) ($l['contactId'] ?? $l['_id']);
+                $hay = strtolower(($l['firstName'] ?? '') . ' ' . ($l['lastName'] ?? '') . ' ' . ($l['email'] ?? '') . ' ' . ($l['phone'] ?? ''));
+                if ($s === '' || isset($seen[$c]) || !str_contains($hay, $s)) continue;
+                $seen[$c] = true;
+                $out[] = ['_id' => $c, 'fullName' => trim(($l['firstName'] ?? '') . ' ' . ($l['lastName'] ?? '')), 'firstName' => $l['firstName'] ?? '', 'lastName' => $l['lastName'] ?? '',
+                    'email' => $l['email'] ?? null, 'phone' => $l['phone'] ?? null, 'jobTitle' => $l['jobTitle'] ?? '', 'linkedinUrl' => $l['linkedinUrl'] ?? null, 'campaignCount' => 1];
+            }
+            return $ok(['data' => array_slice($out, 0, (int) ($q['limit'] ?? 20)), 'total' => count($out), 'limit' => (int) ($q['limit'] ?? 20), 'offset' => 0]);
+        }
         $r = $this->callsTab($method, $path, $q, $b, $ok);
         if ($r !== null) { $this->save(); return $r; }
         if ($method === 'POST' && $path === '/hooks') {

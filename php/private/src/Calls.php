@@ -12,7 +12,7 @@ namespace SignalDesk;
 /** Per-user, per-bucket hourly limits in storage/lemlist-limits.json (timestamps only). */
 final class CallDeskLimiter
 {
-    public const LIMITS = ['send' => 30, 'call' => 100, 'task' => 200, 'label' => 100];
+    public const LIMITS = ['send' => 30, 'call' => 100, 'task' => 200, 'label' => 100, 'lookup' => 60];
 
     /** @var callable(): int */
     public $now;
@@ -259,7 +259,7 @@ final class CallDesk
         }
         $phone = $l ? trim((string) $l['phone']) : '';
         return ['events' => $events, 'phone' => $phone !== '' ? $phone : null, 'tel' => $phone !== '' ? 'tel:' . preg_replace('/[^0-9+]/', '', $phone) : null,
-            'linkedin' => $l['linkedin'] ?? null,
+            'linkedin' => $l['linkedin'] ?? null, 'jobUrl' => LeadSearch::jobUrl($this->store, $l),
             'atlas' => $l && $l['atlas_pool'] !== null ? ['pool' => (int) $l['atlas_pool'], 'matching' => $l['atlas_matching'] !== null ? (int) $l['atlas_matching'] : null] : null];
     }
 
@@ -529,10 +529,10 @@ final class CallDesk
                     }
                     throw $e;
                 }
-                $this->store->db->prepare('INSERT INTO calls (external_id, lemlist_id, task_id, lead_id, user_id, by_user, call_status, started_at, created_at, answered, task_done, callback_at, kind)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(external_id) DO UPDATE SET lemlist_id = excluded.lemlist_id')
+                $this->store->db->prepare('INSERT INTO calls (external_id, lemlist_id, task_id, lead_id, user_id, by_user, call_status, started_at, created_at, answered, task_done, callback_at, kind, note)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(external_id) DO UPDATE SET lemlist_id = excluded.lemlist_id')
                     ->execute([$externalId, (string) ($r['data']['_id'] ?? 'logged'), $taskId, $leadId, $sender['userId'], $this->user, $statusKey, $call['startedAt'], ($this->now)(),
-                        (int) $answered, $kind === 'phone' && $due === null ? 1 : 0, $due, $kind]);
+                        (int) $answered, $kind === 'phone' && $due === null ? 1 : 0, $due, $kind, $note !== '' ? $note : null]);
             }
             try {
                 if ($taskUpdate !== null) $client->write('PATCH', '/tasks', $taskUpdate); // the same body twice is harmless: Save again is safe
@@ -559,6 +559,260 @@ final class CallDesk
         $this->refreshAfterAction();
         return ['ok' => true, 'next' => true, 'results' => $results, 'today' => $this->today(),
             'message' => $due ? 'Call logged; the task moves to ' . $callback . ' and stays open.' : 'Call logged and task completed in lemlist.'];
+    }
+
+    // ------------------------------------------------------------------ lead search (Calls tab): every synced lead, every campaign
+
+    public const SEARCH_LIMIT = 50;
+
+    /** id => {name, status} of every campaign we know (running ones from the sync, every other status from the daily campaign list). */
+    private function campaignNames(): array
+    {
+        $out = [];
+        foreach ($this->store->all('SELECT id, name, status FROM campaign_names') as $c) $out[$c['id']] = ['name' => (string) $c['name'], 'status' => (string) $c['status']];
+        foreach ($this->store->all('SELECT id, name, status, COALESCE(running, 1) AS running FROM campaigns') as $c) {
+            $out[$c['id']] = ['name' => (string) $c['name'], 'status' => $out[$c['id']]['status'] ?? ((int) $c['running'] ? (string) $c['status'] : 'stopped')];
+        }
+        return $out;
+    }
+
+    /**
+     * Search name, phone, company or email over ALL leads in the local database: every campaign (running, paused, ended), every lead status,
+     * finished tasks included. Accents and case are ignored ("Sørensen" = "sorensen"); phones are compared on their last 9 digits.
+     */
+    public function searchLeads(string $q): array
+    {
+        $q = trim($q);
+        if (mb_strlen($q) < 2) return ['q' => $q, 'results' => [], 'total' => 0];
+        $phone = LeadSearch::phoneQuery($q);
+        $tokens = $phone === null ? LeadSearch::tokens($q) : [];
+        $hits = [];
+        foreach ($this->store->all('SELECT lead_id, campaign_id, first_name, last_name, company, title, email, phone, phones FROM leads') as $l) {
+            $match = $phone !== null ? LeadSearch::phoneMatch($phone, array_merge([(string) $l['phone']], explode("\n", (string) $l['phones']))) : LeadSearch::textMatch($tokens, $l);
+            if ($match) $hits[] = $l;
+        }
+        usort($hits, fn ($a, $b) => [LeadSearch::fold($a['first_name'] . ' ' . $a['last_name']), $a['lead_id']] <=> [LeadSearch::fold($b['first_name'] . ' ' . $b['last_name']), $b['lead_id']]);
+        $camps = $this->campaignNames();
+        $results = array_map(function ($l) use ($camps) {
+            $name = trim($l['first_name'] . ' ' . $l['last_name']);
+            $c = $camps[$l['campaign_id']] ?? null;
+            return ['id' => $l['lead_id'], 'name' => $name !== '' ? $name : '(no name)', 'title' => (string) $l['title'], 'company' => (string) $l['company'],
+                'campaign' => $c['name'] ?? '', 'campaignStatus' => $c['status'] ?? '', 'phone' => trim((string) $l['phone']) ?: null];
+        }, array_slice($hits, 0, self::SEARCH_LIMIT));
+        return ['q' => $q, 'results' => $results, 'total' => count($hits)];
+    }
+
+    /** The lead card: who, campaign / status / step, all variables, call history, the signal, the job advert. Read-only. */
+    public function leadCard(string $id): array
+    {
+        if (!preg_match('/^lea_[A-Za-z0-9]{3,60}$/', $id)) throw new ValidationError('Unknown lead');
+        $l = $this->store->all('SELECT * FROM leads WHERE lead_id = ?', [$id])[0] ?? throw new NotFoundError('This lead is not in the local database (yet).');
+        $o = (new Outreach($this->store, $this->config, $this->tz))->lead($id);
+        $c = $this->campaignNames()[$l['campaign_id']] ?? null;
+        $fields = [];
+        foreach (json_decode((string) $l['fields'], true) ?: [] as $k => $v) if (is_string($v) && trim($v) !== '') $fields[] = ['name' => (string) $k, 'value' => $v];
+        $phone = trim((string) $l['phone']);
+        $name = trim($l['first_name'] . ' ' . $l['last_name']);
+        $lv = $o['level'];
+        $s = $this->sender();
+        return ['id' => $id, 'name' => $name !== '' ? $name : '(no name)', 'title' => (string) $l['title'], 'company' => (string) $l['company'], 'email' => trim((string) $l['email']) ?: null,
+            'phone' => $phone !== '' ? $phone : null, 'tel' => $phone !== '' ? 'tel:' . preg_replace('/[^0-9+]/', '', $phone) : null,
+            'otherPhones' => array_values(array_filter(explode("\n", (string) $l['phones']))), 'linkedin' => trim((string) $l['linkedin']) ?: null,
+            'jobUrl' => LeadSearch::jobUrl($this->store, $l),
+            'campaign' => ['id' => $l['campaign_id'], 'name' => $c['name'] ?? (string) $o['campaign'], 'status' => $c['status'] ?? ''],
+            'leadStatus' => $o['status'], 'lemlistState' => (string) $l['last_state'], 'paused' => (bool) $l['paused'],
+            'step' => ['n' => (int) $lv['n'], 'total' => (int) $lv['total'], 'label' => (string) $lv['label']],
+            'lemlistUrl' => $o['lemlistUrl'], 'fields' => $fields, 'calls' => $this->callHistory($l), 'signal' => LeadSearch::signal($this->store, $l),
+            'writes' => $this->writesOn() ? 'on' : 'off', 'viewOnly' => $s === null, 'statuses' => $this->statuses(), 'calledToday' => $this->today()];
+    }
+
+    /**
+     * Every call on this person (this lead, and the same contact / email in other campaigns), newest first: calls logged here (date, outcome,
+     * note) and lemlist's own call activities (dialer calls, calls logged in lemlist) that are not one of ours.
+     */
+    private function callHistory(array $l): array
+    {
+        $ids = [$l['lead_id']];
+        $contact = (string) $l['contact_id'];
+        $email = trim((string) $l['email']);
+        if ($contact !== '' || $email !== '') {
+            foreach ($this->store->all("SELECT lead_id FROM leads WHERE (contact_id = ? AND contact_id <> '') OR (email = ? COLLATE NOCASE AND email <> '')", [$contact, $email]) as $r) $ids[] = $r['lead_id'];
+        }
+        $ids = array_values(array_unique($ids));
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $camps = $this->campaignNames();
+        $campOf = [];
+        foreach ($this->store->all("SELECT lead_id, campaign_id FROM leads WHERE lead_id IN ($in)", $ids) as $r) $campOf[$r['lead_id']] = $camps[$r['campaign_id']]['name'] ?? '';
+        $st = CallOutcomes::all($this->store);
+        $out = [];
+        $ours = [];
+        foreach ($this->store->all("SELECT * FROM calls WHERE lead_id IN ($in) ORDER BY created_at DESC", $ids) as $c) {
+            $t = (int) $c['created_at'];
+            $ours[] = $t;
+            $out[] = ['at' => gmdate('Y-m-d\TH:i:s\Z', $t), 'outcome' => (string) ($st[$c['call_status']]['label'] ?? $c['call_status']), 'answered' => (bool) $c['answered'],
+                'note' => trim((string) ($c['note'] ?? '')) ?: null, 'callback' => $c['callback_at'] ? substr((string) $c['callback_at'], 0, 10) : null,
+                'by' => (string) $c['by_user'], 'campaign' => $campOf[$c['lead_id']] ?? '', 'source' => 'Signal Desk'];
+        }
+        foreach ($this->store->all("SELECT type, lead_id, created_at FROM activities WHERE lead_id IN ($in) AND type LIKE 'aircall%' ORDER BY created_at DESC", $ids) as $a) {
+            $t = self::ts($a['created_at']);
+            $dup = false;
+            foreach ($ours as $o) if (abs($o - $t) <= 900) { $dup = true; break; } // the activity of a call we logged
+            if ($dup) continue;
+            $out[] = ['at' => gmdate('Y-m-d\TH:i:s\Z', $t), 'outcome' => Outreach::activityLabel((string) $a['type']), 'answered' => null, 'note' => null, 'callback' => null,
+                'by' => '', 'campaign' => $campOf[$a['lead_id']] ?? '', 'source' => 'lemlist'];
+        }
+        usort($out, fn ($a, $b) => strcmp($b['at'], $a['at']));
+        return $out;
+    }
+
+    /** Outcome key + "did they answer?" checked against the live call statuses. */
+    private function outcomeFor(string $statusKey, mixed $answered): array
+    {
+        if (!is_bool($answered)) throw new ValidationError('Choose Answered or Not answered first.');
+        $st = CallOutcomes::all($this->store)[$statusKey] ?? null;
+        if (!$st || !$st['offered'] || !$st['inLemlist']) throw new ValidationError('Pick an outcome from the list.');
+        if ((bool) $st['answered'] !== $answered) throw new ValidationError('That outcome does not match "' . ($answered ? 'Answered' : 'Not answered') . '".');
+        return $st;
+    }
+
+    /** A call-back date (YYYY-MM-DD, after today, within a year) as 09:00 Brussels in UTC, or null for none. */
+    private function callbackDue(string $callback): ?string
+    {
+        if ($callback === '') return null;
+        $d = \DateTimeImmutable::createFromFormat('!Y-m-d', $callback, new \DateTimeZone($this->tz));
+        $today = (new \DateTimeImmutable('@' . ($this->now)()))->setTimezone(new \DateTimeZone($this->tz))->setTime(0, 0);
+        if (!$d || $d->format('Y-m-d') !== $callback || $d <= $today || $d > $today->modify('+366 days')) throw new ValidationError('Pick a call-back date after today (within a year).');
+        return $d->setTime(9, 0)->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s.000\Z');
+    }
+
+    /**
+     * "Log a call" from the lead card (inbound call-backs, leads without an open call task): POST /calls {leadId} only, no task is completed,
+     * moved or created. A call-back date goes to the Atlas task (as in the Now calling panel); lemlist has no task to move here.
+     * Same guard, kill switch (LEMLIST_WRITES), rate limit, idempotency (externalId per attempt) and audit (ids only) as every call.
+     */
+    public function logLeadCall(array $in): array
+    {
+        $leadId = is_string($in['leadId'] ?? null) ? $in['leadId'] : '';
+        $attempt = is_string($in['attempt'] ?? null) ? $in['attempt'] : '';
+        if (!preg_match('/^lea_[A-Za-z0-9]{3,60}$/', $leadId)) throw new ValidationError('Unknown lead');
+        if (!preg_match('/^[a-f0-9]{16,32}$/', $attempt)) throw new ValidationError('Missing call attempt id (reload the page).');
+        $statusKey = is_string($in['status'] ?? null) ? $in['status'] : '';
+        $st = $this->outcomeFor($statusKey, $in['answered'] ?? null);
+        $answered = (bool) $in['answered'];
+        $note = trim((string) ($in['note'] ?? ''));
+        if (mb_strlen($note) > self::MAX_NOTE) throw new ValidationError('The note is too long (max ' . self::MAX_NOTE . ' characters).');
+        $callback = trim((string) ($in['callbackDate'] ?? ''));
+        $due = $this->callbackDue($callback);
+        $sender = $this->senderOrFail();
+        $lead = $this->store->all('SELECT * FROM leads WHERE lead_id = ?', [$leadId])[0] ?? throw new NotFoundError('This lead is not in the local database (yet).');
+        $name = trim($lead['first_name'] . ' ' . $lead['last_name']);
+        $externalId = 'sd-lead-' . substr($leadId, 4) . '-' . $attempt;
+        $call = ['externalId' => $externalId, 'userId' => $sender['userId'], 'direction' => 'outbound', // the guard allows outbound calls only
+            'startedAt' => gmdate('Y-m-d\TH:i:s\Z', ($this->now)()), 'callStatus' => $statusKey, 'provider' => 'signal-desk', 'leadId' => $leadId];
+        if ($note !== '') $call['note'] = $note;
+        $requests = [['POST', '/calls', $call]];
+        $ids = ['leadId' => $leadId, 'callStatus' => $statusKey];
+        $ctx = ['externalId' => $externalId, 'note' => $note, 'callback' => $callback, 'answered' => $answered, 'outcome' => (string) $st['label'],
+            'campaign' => $this->campaignNames()[$lead['campaign_id']]['name'] ?? '', 'name' => $name, 'company' => (string) $lead['company'], 'lead' => $lead];
+        if (!$this->writesOn()) {
+            return $this->preview('call_log_lead', $requests, $ids) + ['results' => $this->atlasSide($ctx, true)];
+        }
+        if ($this->store->meta('calls_api') === 'no') throw new AppError(402, 'LEMLIST_PLAN', 'Calls API needs Email Pro+: log this call in lemlist itself.');
+        $this->limiter->hit($this->user, 'call');
+        $client = $this->clientOrFail();
+        $results = [];
+        $lemlistError = null;
+        try {
+            $done = $this->store->all('SELECT * FROM calls WHERE external_id = ?', [$externalId])[0] ?? null;
+            if (!$done || !$done['lemlist_id']) {
+                $r = $this->postCall($client, $call);
+                $this->store->db->prepare('INSERT INTO calls (external_id, lemlist_id, task_id, lead_id, user_id, by_user, call_status, started_at, created_at, answered, task_done, callback_at, kind, note)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(external_id) DO UPDATE SET lemlist_id = excluded.lemlist_id')
+                    ->execute([$externalId, (string) ($r['data']['_id'] ?? 'logged'), '', $leadId, $sender['userId'], $this->user, $statusKey, $call['startedAt'], ($this->now)(),
+                        (int) $answered, 0, $due, 'lead', $note !== '' ? $note : null]);
+            }
+            if ((int) $st['positive'] || (int) $st['negative']) $this->setOutcome($leadId, (int) $st['positive'] ? 'Interested' : 'Not interested');
+            $this->audit('call_log_lead', $ids, 'logged');
+            $results[] = ['dest' => 'lemlist', 'ok' => true, 'text' => 'lemlist ✓ call logged on the lead' . ($note !== '' ? ' with your note' : '') . ' (no task)'
+                . ($due !== null ? '; no lemlist task to move, the call-back date goes to Atlas' : '')];
+        } catch (AppError $e) {
+            $lemlistError = $e;
+            $results[] = ['dest' => 'lemlist', 'ok' => false, 'text' => 'lemlist: ' . $e->getMessage()];
+        }
+        array_push($results, ...$this->atlasSide($ctx, false));
+        if ($lemlistError) return ['ok' => false, 'results' => $results, 'message' => $lemlistError->getMessage() . ' Click Save again: nothing that worked is sent twice.'];
+        return ['ok' => true, 'results' => $results, 'today' => $this->today(), 'message' => 'Call logged on ' . ($name !== '' ? $name : 'the lead') . '.', 'card' => $this->leadCard($leadId)];
+    }
+
+    /**
+     * "Search lemlist": a live, read-only lookup for leads not in the local database yet. An email -> GET /leads?email= (every campaign of that
+     * person, with variables); anything else -> GET /v2/contacts?search= (name, email, phone). Nothing is stored.
+     */
+    public function searchLemlist(string $q): array
+    {
+        $q = trim($q);
+        if (mb_strlen($q) < 2) throw new ValidationError('Type at least 2 characters.');
+        $client = $this->clientOrFail();
+        $this->limiter->hit($this->user, 'lookup');
+        $local = fn (string $id) => $id !== '' && $this->store->one('SELECT 1 FROM leads WHERE lead_id = ?', [$id]) !== null;
+        if (filter_var($q, FILTER_VALIDATE_EMAIL)) return ['q' => $q, 'source' => 'leads', 'results' => $this->liveLeads($client, $q, $local)];
+        try {
+            $r = (array) $client->get('/v2/contacts', ['search' => $q, 'limit' => 20]);
+        } catch (NotFoundError) {
+            $r = [];
+        }
+        $rows = $r['data']['data'] ?? $r['data'] ?? $r['contacts'] ?? (array_is_list($r) ? $r : []);
+        $out = [];
+        foreach (is_array($rows) ? $rows : [] as $c) {
+            if (!is_array($c)) continue;
+            $name = trim((string) ($c['fullName'] ?? trim(($c['firstName'] ?? '') . ' ' . ($c['lastName'] ?? ''))));
+            $out[] = ['contactId' => (string) ($c['_id'] ?? ''), 'name' => $name !== '' ? $name : '(no name)', 'title' => (string) ($c['jobTitle'] ?? ''), 'company' => (string) ($c['companyName'] ?? ''),
+                'email' => (string) ($c['email'] ?? '') ?: null, 'phone' => (string) ($c['phone'] ?? '') ?: null, 'linkedin' => (string) ($c['linkedinUrl'] ?? '') ?: null,
+                'campaigns' => (int) ($c['campaignCount'] ?? 0)];
+        }
+        return ['q' => $q, 'source' => 'contacts', 'results' => $out];
+    }
+
+    /** One person's leads in lemlist, live (GET /leads?email=, read-only): campaign, status and every variable. */
+    public function lemlistLeads(string $email): array
+    {
+        $email = trim($email);
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) throw new ValidationError('Not an email address');
+        $client = $this->clientOrFail();
+        $this->limiter->hit($this->user, 'lookup');
+        $local = fn (string $id) => $id !== '' && $this->store->one('SELECT 1 FROM leads WHERE lead_id = ?', [$id]) !== null;
+        return ['email' => $email, 'results' => $this->liveLeads($client, $email, $local)];
+    }
+
+    private function liveLeads(LemlistClient $client, string $email, callable $local): array
+    {
+        try {
+            $r = $client->get('/leads', ['email' => $email, 'version' => 'v2']);
+        } catch (NotFoundError) {
+            return [];
+        }
+        $rows = is_array($r) ? (array_is_list($r) ? $r : ($r['data'] ?? [$r])) : [];
+        $out = [];
+        foreach ($rows as $l) {
+            if (!is_array($l) || empty($l['_id'])) continue;
+            $v = is_array($l['variables'] ?? null) ? $l['variables'] : $l;
+            $fields = [];
+            foreach (json_decode((string) LeadVars::all($v), true) ?: [] as $k => $val) $fields[] = ['name' => (string) $k, 'value' => (string) $val];
+            $row = ['fields' => LeadVars::all($v)];
+            $job = null;
+            foreach (LeadSearch::JOB_URL_FIELDS as $n) {
+                $u = LeadVars::field($row, [$n]);
+                if ($u !== null && preg_match('~^https?://~i', $u) && filter_var($u, FILTER_VALIDATE_URL)) { $job = ['url' => $u, 'from' => 'lemlist variable "' . $n . '"']; break; }
+            }
+            $phone = trim((string) ($v['phone'] ?? ''));
+            $id = (string) $l['_id'];
+            $out[] = ['id' => $id, 'inDb' => $local($id), 'name' => trim(($v['firstName'] ?? '') . ' ' . ($v['lastName'] ?? '')) ?: '(no name)', 'title' => (string) ($v['jobTitle'] ?? ''),
+                'company' => (string) ($v['companyName'] ?? ''), 'email' => (string) ($v['email'] ?? $email), 'phone' => $phone !== '' ? $phone : null,
+                'tel' => $phone !== '' ? 'tel:' . preg_replace('/[^0-9+]/', '', $phone) : null, 'linkedin' => (string) ($v['linkedinUrl'] ?? '') ?: null, 'jobUrl' => $job,
+                'campaign' => ['id' => (string) ($l['campaign']['id'] ?? $l['campaignId'] ?? ''), 'name' => (string) ($l['campaign']['name'] ?? ''), 'status' => (string) ($l['campaign']['status'] ?? '')],
+                'leadStatus' => (string) ($l['status'] ?? ''), 'lemlistState' => (string) ($l['state'] ?? ''), 'paused' => !empty($l['isPaused']), 'fields' => $fields];
+        }
+        return $out;
     }
 
     private function synced(string $externalId, string $what): bool
@@ -1265,5 +1519,190 @@ final class CallDesk
     {
         return ['eventAt' => $this->store->live('last_event_at'), 'inboxAt' => $this->store->live('inbox_event_at'), 'tasksAt' => $this->store->live('tasks_event_at'),
             'badge' => self::dueCount($this->store)];
+    }
+}
+
+/**
+ * Calls tab lead search and the Job advert link. Pure helpers over the local lemlist database (read-only):
+ * accent- and case-insensitive text, phones compared on their last 9 digits, the job URL from the lead's variables or the matching signal.
+ */
+final class LeadSearch
+{
+    /** lemlist variables that hold the job advert, in order (names matched ignoring case and spaces). Live campaigns use "Job URL" and "Source URL". */
+    public const JOB_URL_FIELDS = ['Job URL', 'jobUrl', 'Job Link', 'jobLink', 'Source URL'];
+    /** The vacancy title among the lead's variables (the lead's own jobTitle is the person's title). */
+    public const POSITION_FIELDS = ['Position', 'Job Title Vacancy', 'Vacancy'];
+    public const OTHER_PHONES = ['phone1', 'phone2', 'phone3', 'phone4'];
+    private const FOLD = ['à' => 'a', 'á' => 'a', 'â' => 'a', 'ã' => 'a', 'ä' => 'a', 'å' => 'a', 'ā' => 'a', 'ă' => 'a', 'ą' => 'a', 'æ' => 'ae',
+        'ç' => 'c', 'ć' => 'c', 'č' => 'c', 'ĉ' => 'c', 'ď' => 'd', 'đ' => 'd', 'ð' => 'd', 'è' => 'e', 'é' => 'e', 'ê' => 'e', 'ë' => 'e', 'ē' => 'e', 'ė' => 'e', 'ę' => 'e', 'ě' => 'e',
+        'ğ' => 'g', 'ì' => 'i', 'í' => 'i', 'î' => 'i', 'ï' => 'i', 'ī' => 'i', 'į' => 'i', 'ı' => 'i', 'ł' => 'l', 'ľ' => 'l', 'ñ' => 'n', 'ń' => 'n', 'ň' => 'n',
+        'ò' => 'o', 'ó' => 'o', 'ô' => 'o', 'õ' => 'o', 'ö' => 'o', 'ø' => 'o', 'ō' => 'o', 'ő' => 'o', 'œ' => 'oe', 'ŕ' => 'r', 'ř' => 'r', 'ś' => 's', 'š' => 's', 'ş' => 's', 'ș' => 's',
+        'ß' => 'ss', 'ť' => 't', 'ţ' => 't', 'ț' => 't', 'þ' => 'th', 'ù' => 'u', 'ú' => 'u', 'û' => 'u', 'ü' => 'u', 'ū' => 'u', 'ů' => 'u', 'ű' => 'u', 'ų' => 'u',
+        'ý' => 'y', 'ÿ' => 'y', 'ź' => 'z', 'ż' => 'z', 'ž' => 'z', '’' => "'", '‘' => "'"];
+
+    /** Lowercase without accents: "Sørensen" -> "sorensen", "Dupré" -> "dupre". */
+    public static function fold(string $s): string
+    {
+        return strtr(mb_strtolower($s, 'UTF-8'), self::FOLD);
+    }
+
+    /** @return list<string> the folded words of a text query */
+    public static function tokens(string $q): array
+    {
+        return array_values(array_filter(preg_split('/\s+/u', trim(self::fold($q))) ?: [], fn ($t) => $t !== ''));
+    }
+
+    public static function textMatch(array $tokens, array $lead): bool
+    {
+        if (!$tokens) return false;
+        $hay = self::fold(implode(' ', [$lead['first_name'] ?? '', $lead['last_name'] ?? '', $lead['company'] ?? '', $lead['email'] ?? '', $lead['title'] ?? '']));
+        foreach ($tokens as $t) if (!str_contains($hay, $t)) return false;
+        return true;
+    }
+
+    /** A phone number's digits without the international 00 / trunk 0 prefixes, last 9 kept: "+32 470 12 34 56", "0032470123456", "0470123456" -> "470123456". */
+    public static function phoneKey(string $p): string
+    {
+        return substr(ltrim((string) preg_replace('/\D/', '', $p), '0'), -9);
+    }
+
+    /**
+     * A phone query ("+32 470 12 34 56", "0032470123456", "0470123456", "470 12"): its key, or null when the query is not a phone number.
+     * 8 digits or more: a whole number, compared on its last 9 digits (a Belgian landline has 8: 02 555 01 01). Fewer: a part of the number.
+     */
+    public static function phoneQuery(string $q): ?array
+    {
+        if (!preg_match('~^\+?[\d\s().\/-]+$~', trim($q)) || strlen((string) preg_replace('/\D/', '', $q)) < 2) return null;
+        $key = self::phoneKey($q);
+        return $key === '' ? null : ['full' => strlen($key) >= 8, 'key' => $key];
+    }
+
+    /** Does any of the lead's phones match? Spaces, dashes, brackets and the prefix are ignored: the last 9 digits are compared. */
+    public static function phoneMatch(array $query, array $phones): bool
+    {
+        foreach ($phones as $p) {
+            $k = self::phoneKey((string) $p);
+            if (strlen($k) < 6) continue;
+            $hit = $query['full'] ? (strlen($k) >= 8 && (str_ends_with($k, $query['key']) || str_ends_with($query['key'], $k))) : str_contains($k, $query['key']);
+            if ($hit) return true;
+        }
+        return false;
+    }
+
+    /** phone1-4 of an exported lead, one per line (searched like the main phone). */
+    public static function otherPhones(array $lead): ?string
+    {
+        $out = [];
+        $by = [];
+        foreach ($lead as $k => $v) if (is_string($k) && (is_string($v) || is_int($v))) $by[strtolower($k)] = trim((string) $v);
+        foreach (self::OTHER_PHONES as $n) if (($by[$n] ?? '') !== '') $out[] = mb_substr($by[$n], 0, 60);
+        return $out ? implode("\n", $out) : null;
+    }
+
+    /** OutreachBusiness::companyKey plus a few more trailing legal forms (ApS, A/S, AB, Oy, SAS, SARL, SpA, KG, SE, SL, VZW, ASBL, CommV). */
+    public static function companyKey(string $name): string
+    {
+        $s = trim(self::fold($name));
+        for ($i = 0; $i < 2; $i++) $s = (string) preg_replace('~[\s,]+(aps|a/s|as|ab|oy|sas|sarl|spa|kg|se|sl|vzw|asbl|commv)\.?$~u', '', $s);
+        return OutreachBusiness::companyKey($s);
+    }
+
+    /** "Data Architect (m/f/x)" -> "data architect" */
+    public static function titleKey(string $title): string
+    {
+        $s = self::fold($title);
+        $s = (string) preg_replace('~\(([mfvhx]\s*/\s*)+[mfvhx]\)|\b([mfvhx]\s*/\s*){1,2}[mfvhx]\b~u', ' ', $s);
+        return trim((string) preg_replace('~[^a-z0-9]+~', ' ', $s));
+    }
+
+    private static function isUrl(?string $u): bool
+    {
+        return $u !== null && preg_match('~^https?://~i', $u) && filter_var($u, FILTER_VALIDATE_URL) !== false;
+    }
+
+    /**
+     * The job advert for a lead: (a) a lemlist variable holding the job URL (JOB_URL_FIELDS), else (b) the matching signal in Signal Desk:
+     * the decision maker's own row (linked by LinkedIn), else the one signal with the same company + job title. null = no job link.
+     * @return array{url:string, from:string}|null
+     */
+    public static function jobUrl(LemlistStore $store, ?array $lead): ?array
+    {
+        if (!$lead) return null;
+        foreach (self::JOB_URL_FIELDS as $n) {
+            $v = LeadVars::field($lead, [$n]);
+            if (self::isUrl($v)) return ['url' => $v, 'from' => 'lemlist variable "' . self::realName($lead, $n) . '"'];
+        }
+        $s = self::signal($store, $lead);
+        if ($s && self::isUrl($s['jobUrl'])) return ['url' => $s['jobUrl'], 'from' => 'Signal Desk signal (' . $s['tab'] . ' row ' . $s['row'] . ')'];
+        return null;
+    }
+
+    private static function realName(array $lead, string $n): string
+    {
+        foreach (array_keys(json_decode((string) ($lead['fields'] ?? ''), true) ?: []) as $k) {
+            if (strtolower((string) preg_replace('/\s+/', '', (string) $k)) === strtolower((string) preg_replace('/\s+/', '', $n))) return (string) $k;
+        }
+        return $n;
+    }
+
+    /**
+     * The original signal behind a lead: the approved decision-maker row it is linked to (LinkedIn), else the single workbook signal with the
+     * same company and job title (the lead's "Position" variable, else its title). Several different job URLs for that pair = no match.
+     */
+    public static function signal(LemlistStore $store, array $lead): ?array
+    {
+        if (trim((string) ($lead['signal_job_title'] ?? '')) !== '') {
+            return ['track' => $lead['signal_track'] ?: 'IT', 'company' => (string) $lead['signal_company'], 'jobTitle' => (string) $lead['signal_job_title'],
+                'jobUrl' => (string) $lead['signal_job_url'], 'roleGroup' => (string) $lead['signal_role_group'], 'dateFound' => $lead['signal_date_found'],
+                'tab' => $lead['signal_track'] === 'HR' ? Sheet::HR_DECISION_MAKERS : Sheet::DECISION_MAKERS, 'row' => (int) $lead['signal_row'], 'match' => 'decision maker (LinkedIn)'];
+        }
+        $ck = self::companyKey((string) ($lead['company'] ?? ''));
+        if ($ck === '') return null;
+        foreach (array_filter([LeadVars::field($lead, self::POSITION_FIELDS), (string) ($lead['title'] ?? '')]) as $title) {
+            $tk = self::titleKey($title);
+            if ($tk === '') continue;
+            $rows = $store->all('SELECT * FROM signal_jobs WHERE company_key = ? AND title_key = ? ORDER BY (tab = ?) DESC, (tab = ?) DESC, row', [$ck, $tk, Sheet::DECISION_MAKERS, Sheet::HR_DECISION_MAKERS]);
+            if (!$rows) continue;
+            $urls = array_unique(array_filter(array_map(fn ($r) => trim((string) $r['job_url']), $rows)));
+            if (count($urls) > 1) return null; // the same title at the same company with different adverts: not sure which one
+            $r = $rows[0];
+            foreach ($rows as $x) if (trim((string) $x['job_url']) !== '') { $r = $x; break; }
+            return ['track' => $r['track'], 'company' => $r['company'], 'jobTitle' => $r['job_title'], 'jobUrl' => (string) $r['job_url'], 'roleGroup' => (string) $r['role_group'],
+                'dateFound' => $r['date_found'], 'tab' => $r['tab'], 'row' => (int) $r['row'], 'match' => 'same company + job title'];
+        }
+        return null;
+    }
+
+    /** Rebuild signal_jobs from the workbook (read-only): Decision Makers, HR Decision Makers, the verify tab, Hr signals and Signals. */
+    public static function indexSignals(LemlistStore $store, callable $readTab): int
+    {
+        $rows = [];
+        $add = function (string $tab, string $track, int $row, string $company, string $title, string $url, ?string $date, string $group) use (&$rows) {
+            $ck = self::companyKey($company);
+            $tk = self::titleKey($title);
+            if ($ck === '' || $tk === '') return;
+            $rows[] = [$ck, $tk, mb_substr($company, 0, 200), mb_substr($title, 0, 200), mb_substr($url, 0, 600), $track, $tab, $row, $date, mb_substr($group, 0, 120)];
+        };
+        foreach ([Sheet::DECISION_MAKERS => 'IT', Sheet::HR_DECISION_MAKERS => 'HR'] as $tab => $track) {
+            foreach ($readTab($tab) as $r) {
+                if ($r['row'] < 2) continue;
+                $c = $r['cells'];
+                $add($tab, $track, $r['row'], Sheet::display($c[3] ?? ''), Sheet::display($c[5] ?? ''), trim(Sheet::display($c[Sheet::DMT_JOB_URL] ?? '')), ExcelDate::cellToIso($c[2] ?? null), Sheet::display($c[6] ?? ''));
+            }
+        }
+        foreach ([Sheet::VERIFY => 'IT', Sheet::HR => 'HR', Sheet::SIGNALS => 'IT'] as $tab => $track) {
+            foreach ($readTab($tab) as $r) {
+                if ($r['row'] < 2 || !Sheet::isDataRow($r['cells'])) continue;
+                $c = $r['cells'];
+                $add($tab, $track, $r['row'], Sheet::display($c[Sheet::COMPANY] ?? ''), Sheet::display($c[Sheet::JOB_TITLE] ?? ''), trim(Sheet::display($c[Sheet::JOB_URL] ?? '')),
+                    ExcelDate::cellToIso($c[Sheet::DATE_FOUND] ?? null), Sheet::display($c[Sheet::ROLE_GROUP] ?? ''));
+            }
+        }
+        $store->write(function () use ($store, $rows) {
+            $store->db->exec('DELETE FROM signal_jobs');
+            $ins = $store->db->prepare('INSERT INTO signal_jobs (company_key, title_key, company, job_title, job_url, track, tab, row, date_found, role_group) VALUES (?,?,?,?,?,?,?,?,?,?)');
+            foreach ($rows as $r) $ins->execute($r);
+        });
+        return count($rows);
     }
 }

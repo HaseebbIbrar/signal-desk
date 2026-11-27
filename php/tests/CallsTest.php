@@ -492,7 +492,7 @@ test('calls: a positive call counts in the Outreach numbers (call answered, Inte
     eq(['done' => 1, 'answered' => 1, 'positive' => 1], $d->today());
 });
 
-test('call scripts: {{variables}} filled from the lead (spaces and case ignored, standard fields, fallbacks, nested once); only used fields are stored', function () {
+test('call scripts: {{variables}} filled from the lead (spaces and case ignored, standard fields, fallbacks, nested once); ALL lead variables are stored (lead card)', function () {
     $vals = \SignalDesk\LeadVars::values(['first_name' => 'Lena', 'last_name' => 'V', 'company' => 'Northbridge', 'title' => 'CISO', 'phone' => '+32 470', 'email' => '', 'linkedin' => '',
         'fields' => json_encode(['Touch 1 Call' => 'Hi {{firstName}}, Jonathan here.', 'Call-again' => 'Again, {{ companyName }}', 'Final call' => ''])]);
     eq(['Hi Lena, Jonathan here.', []], \SignalDesk\LeadVars::fill('{{Touch 1 Call}}', $vals), 'names with spaces; nested {{firstName}} filled');
@@ -505,8 +505,9 @@ test('call scripts: {{variables}} filled from the lead (spaces and case ignored,
         'only the custom fields steps use (standard ones live in their own columns)');
     [$store] = t_lem_synced();
     $f = json_decode((string) $store->one("SELECT fields FROM leads WHERE lead_id = 'lea_it01'"), true);
-    eq(['Touch 1 Call', 'Call-again', 'Touch 2 mail', 'Final call'], array_keys($f), 'synced from the lead export');
-    ok(!str_contains(json_encode($f), 'not used by any step'), 'unused custom fields are not stored');
+    eq(['Touch 1 Call', 'Call-again', 'Touch 2 mail', 'Final call'], array_slice(array_keys($f), 0, 4), 'synced from the lead export: the step variables first');
+    eq(['Internal note', 'Job URL', 'Position', 'location', 'phone1'], array_slice(array_keys($f), 4), 'then every other variable (the lead card shows them all); lemlist own fields are not variables');
+    eq('+32 2 555 01 01', $store->one("SELECT phones FROM leads WHERE lead_id = 'lea_it01'"), 'other phones, for the lead search');
     ok(!str_contains(json_encode($store->all('SELECT * FROM tasks')), 'Jonathan from SwooScale'), 'scripts only in the leads table');
 });
 
