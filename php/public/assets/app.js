@@ -1335,7 +1335,12 @@
       if (!st.res || st.busy || ro) save.disabled = true;
       box.appendChild(save);
       var resLabel = st.res ? (opts.filter(function (o) { return o.key === st.res; })[0] || {}).label : "";
-      box.appendChild(h("span", { class: "sd-muted sd-o-small", text: st.res ? (st.cb ? "Logs the call as \"" + resLabel + "\" with your note and moves the lemlist task to " + st.cb + "." : "Logs the call as \"" + resLabel + "\" with your note, completes the lemlist task, and opens the next call.") : "Choose Answered or Not answered, then the outcome." }));
+      box.appendChild(h("span", { class: "sd-muted sd-o-small", text: st.res ? (st.cb ? "Logs the call as \"" + resLabel + "\" with your note, moves this lemlist task to " + st.cb + " with your note and keeps it open (plus an Atlas note and task when Atlas writes are on)." : "Logs the call as \"" + resLabel + "\" with your note (also as an Atlas note when Atlas writes are on), completes the lemlist task, and opens the next call.") : "Choose Answered or Not answered, then the outcome." }));
+      if (st.lastSave) { // one line per destination: lemlist / Atlas note / Atlas task
+        box.appendChild(h("ul", { class: "sd-k-results", "aria-live": "polite", "aria-label": "Saved to" }, [h("li", { class: "sd-k-results-head", text: "Last save" + (st.lastSave.name ? " (" + st.lastSave.name + ")" : "") + ":" })].concat(st.lastSave.results.map(function (x) {
+          return h("li", { class: "sd-k-result " + (x.ok === true ? "sd-k-result-ok" : x.ok === false ? "sd-k-result-err" : "sd-k-result-info"), text: x.text });
+        }))));
+      }
       box.appendChild(h("span", { class: "sd-muted sd-o-small", text: d.sender ? d.sender.label : "View only: calls cannot be logged from this login." }));
       return box;
     }
@@ -1346,7 +1351,9 @@
       st.busy = true; render();
       api("/api/calls/log", { method: "POST", body: { taskId: cur.id, attempt: st.attempt, answered: st.ans, status: st.res, note: st.note, callbackDate: st.cb } }).then(function (r) {
         st.busy = false;
+        if (r.results) st.lastSave = { name: cur.name, results: r.results };
         if (r.retry) { say("warn", r.message); return; }
+        if (r.ok === false && r.results) { st.msg = { kind: "error", text: r.message }; render(); return; } // keep the form (same attempt): Save again sends nothing twice
         if (r.preview) { st.logged[cur.id] = { label: "Preview", cls: "sd-c-fin" }; st.msg = { kind: "warn", text: previewText(r) }; }
         else if (r.ok) { st.logged[cur.id] = { label: st.cb ? "Call back" : o.label, cls: o.positive ? "sd-c-int" : o.negative ? "sd-c-bnc" : "sd-c-fin" }; st.msg = { kind: "ok", text: r.message }; if (r.today) st.data.today = r.today; }
         else { st.msg = { kind: "warn", text: r.message }; }

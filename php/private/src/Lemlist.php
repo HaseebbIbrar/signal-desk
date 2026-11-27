@@ -2,7 +2,7 @@
 // lemlist (https://developer.lemlist.com): outreach data for the Outreach and Calls tabs.
 //
 //   LemlistGuard   GET allowlist + an explicit WRITE list (anything else is refused before a request is made):
-//                    POST /calls · PATCH /tasks {id, done:true} | {id, dueDate} · POST /tasks/ignore {ids}
+//                    POST /calls · PATCH /tasks {id, done:true} | {id, dueDate[, message]} · POST /tasks/ignore {ids}
 //                    POST /inbox/email · POST /inbox/linkedin · POST /inbox/conversations/labels/{contactId}
 //                    POST /inbox/labels (our 4 labels only) · POST /hooks, DELETE /hooks/{id} (setup script only)
 //   LemlistClient  Basic auth (empty user, key as password), ~8 requests/s (lemlist allows 20 per 2 s), Retry-After on 429,
@@ -102,8 +102,10 @@ final class LemlistGuard
                 $keys = array_keys($body);
                 sort($keys);
                 $done = $keys === ['done', 'id'] && $body['done'] === true;
-                $snooze = $keys === ['dueDate', 'id'] && is_string($body['dueDate']) && strtotime($body['dueDate']) !== false;
-                if (!is_string($body['id'] ?? null) || (!$done && !$snooze)) throw new ForbiddenWriteError('Refused: PATCH /tasks may only set done:true or a dueDate');
+                // a call-back: a new due date, optionally with the call note as the task's text (nothing else: no title, owner or priority)
+                $snooze = ($keys === ['dueDate', 'id'] || ($keys === ['dueDate', 'id', 'message'] && is_string($body['message']) && $body['message'] !== '' && mb_strlen($body['message']) <= 2000))
+                    && is_string($body['dueDate']) && strtotime($body['dueDate']) !== false;
+                if (!is_string($body['id'] ?? null) || (!$done && !$snooze)) throw new ForbiddenWriteError('Refused: PATCH /tasks may only set done:true or a dueDate (with a note)');
                 break;
             case 'POST /tasks/ignore':
                 if (array_keys($body) !== ['ids'] || !is_array($body['ids']) || count($body['ids']) !== 1 || !is_string($body['ids'][0])) throw new ForbiddenWriteError('Refused: POST /tasks/ignore skips one task: {ids: [id]}');
@@ -216,7 +218,7 @@ final class LemlistStore
 {
     public const KEEP_DAYS = 365;
     public const BATCH = 200;
-    private const SCHEMA = 6;
+    private const SCHEMA = 7;
     public ?\PDO $db;
     public readonly string $file;
     public readonly string $dir;
@@ -435,6 +437,8 @@ SQL);
         $this->db->exec('CREATE TABLE IF NOT EXISTS app.calls (external_id TEXT PRIMARY KEY, lemlist_id TEXT, task_id TEXT, lead_id TEXT, user_id TEXT, by_user TEXT, call_status TEXT,
             started_at TEXT, created_at INTEGER, answered INTEGER, task_done INTEGER, callback_at TEXT, kind TEXT)');
         $this->db->exec('CREATE TABLE IF NOT EXISTS app.outcomes (lead_id TEXT PRIMARY KEY, outcome TEXT, by_user TEXT, at INTEGER)');
+        // what one call save already did in Atlas (so "Save again" never sends twice): the person note and the task
+        $this->db->exec('CREATE TABLE IF NOT EXISTS app.call_sync (external_id TEXT PRIMARY KEY, atlas_note TEXT, atlas_task TEXT, at INTEGER)');
         foreach (['calls', 'outcomes'] as $t) { // moved from lemlist.sqlite (before 2026-11-17)
             if (!$this->one("SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = ?", [$t])) continue;
             $have = array_column($this->db->query("PRAGMA main.table_info($t)")->fetchAll(), 'name');

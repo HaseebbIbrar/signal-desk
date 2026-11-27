@@ -97,6 +97,9 @@ final class CallOutcomes
 
 final class CallDesk
 {
+    /** Atlas (read lookups + the two allowed writes), for the call panel's note and call-back task; null = Atlas off. */
+    public ?AtlasClient $atlas = null;
+
     public const CALL_TITLE = '/^\s*(call|calling again|final call|voice\s*mail)/i';
     public const VOICEMAIL_TITLE = '/voice\s*mail/i';
     public const MESSAGE_TYPES = ['email', 'linkedinSend', 'linkedinInvite', 'linkedinVoiceNote', 'whatsappMessage'];
@@ -476,55 +479,195 @@ final class CallDesk
             $due = $d->setTime(9, 0)->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s.000\Z');
         }
         $leadId = (string) $task['lead_id'];
+        $lead = $leadId !== '' ? ($this->store->all('SELECT * FROM leads WHERE lead_id = ?', [$leadId])[0] ?? null) : null;
+        $name = $lead ? trim($lead['first_name'] . ' ' . $lead['last_name']) : trim((string) $task['lead_name']);
+        $company = (string) ($lead['company'] ?? $task['lead_company'] ?? '');
         $externalId = 'sd-' . substr($taskId, 4) . '-' . $attempt;
         $call = ['externalId' => $externalId, 'userId' => $sender['userId'], 'direction' => 'outbound', 'startedAt' => gmdate('Y-m-d\TH:i:s\Z', ($this->now)()),
             'callStatus' => $statusKey, 'provider' => 'signal-desk'];
         if ($note !== '') $call['note'] = $note;
+        // no call-back: the call completes its task (a phone task through POST /calls {taskId}; a manual call task with PATCH done).
+        // a call-back date: the call is logged on the lead (POST /calls with taskId would complete the task) and the SAME task moves to
+        // that day, stays open and gets the note (PATCH /tasks {id, dueDate, message}): the lead waits on that call, the sequence does not move on.
         if ($kind === 'phone' && $due === null) $call['taskId'] = $taskId;
         elseif ($leadId !== '') $call['leadId'] = $leadId;
         else $call['contactId'] = (string) $task['contact_id'];
         $requests = [['POST', '/calls', $call]];
-        if ($due !== null) $requests[] = ['PATCH', '/tasks', ['id' => $taskId, 'dueDate' => $due]];
-        elseif ($kind === 'manualCall') $requests[] = ['PATCH', '/tasks', ['id' => $taskId, 'done' => true]];
+        $taskUpdate = null;
+        if ($due !== null) {
+            $taskUpdate = ['id' => $taskId, 'dueDate' => $due];
+            if ($note !== '') $taskUpdate['message'] = $note;
+        } elseif ($kind === 'manualCall') {
+            $taskUpdate = ['id' => $taskId, 'done' => true];
+        }
+        if ($taskUpdate !== null) $requests[] = ['PATCH', '/tasks', $taskUpdate];
         $ids = ['taskId' => $taskId, 'leadId' => $leadId, 'callStatus' => $statusKey];
-        if (!$this->writesOn()) return $this->preview('call_log', $requests, $ids) + ['next' => true];
+        $ctx = ['externalId' => $externalId, 'note' => $note, 'callback' => $callback, 'answered' => $answered, 'outcome' => (string) $st['label'],
+            'campaign' => $this->campaignInfo((string) $task['campaign_id'])['name'], 'name' => $name, 'company' => $company, 'lead' => $lead];
+        if (!$this->writesOn()) { // preview mode: nothing is sent anywhere, Atlas included
+            return $this->preview('call_log', $requests, $ids) + ['next' => true, 'results' => $this->atlasSide($ctx, true)];
+        }
         if ($this->store->meta('calls_api') === 'no') throw new AppError(402, 'LEMLIST_PLAN', 'Calls API needs Email Pro+: log this call in lemlist itself.');
         $this->limiter->hit($this->user, 'call');
         $client = $this->clientOrFail();
-        $done = $this->store->all('SELECT * FROM calls WHERE external_id = ?', [$externalId])[0] ?? null;
-        if (!$done || !$done['lemlist_id']) {
-            try {
-                $r = $this->postCall($client, $call);
-            } catch (ConflictError $e) {
-                if ($e->errCode === 'CALLS_API_TASK_ALREADY_CLOSED') {
-                    $this->audit('call_log', $ids, 'task_already_closed');
-                    return $this->closedAnswer($taskId, 'Someone already completed this task in lemlist. The queue was refreshed; nothing was logged twice.');
-                }
-                if ($e->errCode === 'CALLS_API_LOG_IN_PROGRESS') {
-                    $this->audit('call_log', $ids, 'log_in_progress');
-                    $this->refreshAfterAction();
-                    return ['ok' => false, 'retry' => true, 'message' => 'lemlist is still saving this call. Click Save again in a moment: it will not be logged twice.'];
-                }
-                throw $e;
-            }
-            $this->store->db->prepare('INSERT INTO calls (external_id, lemlist_id, task_id, lead_id, user_id, by_user, call_status, started_at, created_at, answered, task_done, callback_at, kind)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(external_id) DO UPDATE SET lemlist_id = excluded.lemlist_id')
-                ->execute([$externalId, (string) ($r['data']['_id'] ?? 'logged'), $taskId, $leadId, $sender['userId'], $this->user, $statusKey, $call['startedAt'], ($this->now)(),
-                    (int) $answered, $kind === 'phone' && $due === null ? 1 : 0, $due, $kind]);
-        }
+        $results = [];
+        $lemlistError = null;
         try {
-            foreach (array_slice($requests, 1) as [$m, $p, $b]) $client->write($m, $p, $b);
+            $done = $this->store->all('SELECT * FROM calls WHERE external_id = ?', [$externalId])[0] ?? null;
+            if (!$done || !$done['lemlist_id']) {
+                try {
+                    $r = $this->postCall($client, $call);
+                } catch (ConflictError $e) {
+                    if ($e->errCode === 'CALLS_API_TASK_ALREADY_CLOSED') {
+                        $this->audit('call_log', $ids, 'task_already_closed');
+                        return $this->closedAnswer($taskId, 'Someone already completed this task in lemlist. The queue was refreshed; nothing was logged twice.');
+                    }
+                    if ($e->errCode === 'CALLS_API_LOG_IN_PROGRESS') {
+                        $this->audit('call_log', $ids, 'log_in_progress');
+                        $this->refreshAfterAction();
+                        return ['ok' => false, 'retry' => true, 'message' => 'lemlist is still saving this call. Click Save again in a moment: it will not be logged twice.'];
+                    }
+                    throw $e;
+                }
+                $this->store->db->prepare('INSERT INTO calls (external_id, lemlist_id, task_id, lead_id, user_id, by_user, call_status, started_at, created_at, answered, task_done, callback_at, kind)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(external_id) DO UPDATE SET lemlist_id = excluded.lemlist_id')
+                    ->execute([$externalId, (string) ($r['data']['_id'] ?? 'logged'), $taskId, $leadId, $sender['userId'], $this->user, $statusKey, $call['startedAt'], ($this->now)(),
+                        (int) $answered, $kind === 'phone' && $due === null ? 1 : 0, $due, $kind]);
+            }
+            try {
+                if ($taskUpdate !== null) $client->write('PATCH', '/tasks', $taskUpdate); // the same body twice is harmless: Save again is safe
+            } catch (AppError $e) {
+                $this->audit('call_log', $ids, 'task_update_failed');
+                throw new AppError($e->status, $e->errCode, 'The call is logged in lemlist, but ' . ($due !== null ? 'moving the task to ' . $callback : 'completing the task') . ' failed (' . $e->getMessage() . ').');
+            }
+            $this->store->db->prepare('UPDATE calls SET task_done = 1 WHERE external_id = ?')->execute([$externalId]);
+            if ($due === null) $this->store->db->prepare("UPDATE tasks SET status = 'closed' WHERE id = ?")->execute([$taskId]);
+            else $this->store->db->prepare("UPDATE tasks SET due_date = ?, status = 'upcoming' WHERE id = ?")->execute([$due, $taskId]);
+            if ($leadId !== '' && ((int) $st['positive'] || (int) $st['negative'])) $this->setOutcome($leadId, (int) $st['positive'] ? 'Interested' : 'Not interested');
+            $this->audit('call_log', $ids, $due ? 'logged_callback' : 'logged');
+            $results[] = ['dest' => 'lemlist', 'ok' => true, 'text' => 'lemlist ✓ call logged' . ($note !== '' ? ' with your note' : '')
+                . ($due !== null ? ', task moved to ' . $callback . ($note !== '' ? ' with your note' : '') . ' (still open)' : '')];
         } catch (AppError $e) {
-            $this->audit('call_log', $ids, 'task_update_failed');
-            throw new AppError($e->status, $e->errCode, 'The call is logged in lemlist, but updating the task failed (' . $e->getMessage() . '). Click Save again: the call will not be logged twice.');
+            $lemlistError = $e;
+            $results[] = ['dest' => 'lemlist', 'ok' => false, 'text' => 'lemlist: ' . $e->getMessage()];
         }
-        $this->store->db->prepare('UPDATE calls SET task_done = 1 WHERE external_id = ?')->execute([$externalId]);
-        if ($due === null) $this->store->db->prepare("UPDATE tasks SET status = 'closed' WHERE id = ?")->execute([$taskId]);
-        else $this->store->db->prepare("UPDATE tasks SET due_date = ?, status = 'upcoming' WHERE id = ?")->execute([$due, $taskId]);
-        if ($leadId !== '' && ((int) $st['positive'] || (int) $st['negative'])) $this->setOutcome($leadId, (int) $st['positive'] ? 'Interested' : 'Not interested');
-        $this->audit('call_log', $ids, $due ? 'logged_callback' : 'logged');
+        // Atlas runs whatever happened in lemlist (and the other way round): one side never blocks or undoes the other
+        array_push($results, ...$this->atlasSide($ctx, false));
+        if ($lemlistError) {
+            return ['ok' => false, 'results' => $results, 'message' => $lemlistError->getMessage() . ' Click Save again: nothing that worked is sent twice.'];
+        }
         $this->refreshAfterAction();
-        return ['ok' => true, 'next' => true, 'message' => $due ? 'Call logged; the task moves to ' . $callback . '.' : 'Call logged and task completed in lemlist.', 'today' => $this->today()];
+        return ['ok' => true, 'next' => true, 'results' => $results, 'today' => $this->today(),
+            'message' => $due ? 'Call logged; the task moves to ' . $callback . ' and stays open.' : 'Call logged and task completed in lemlist.'];
+    }
+
+    private function synced(string $externalId, string $what): bool
+    {
+        return (string) $this->store->one("SELECT $what FROM call_sync WHERE external_id = ?", [$externalId]) !== '';
+    }
+
+    private function markSynced(string $externalId, string $what, string $value): void
+    {
+        $this->store->db->prepare("INSERT INTO call_sync (external_id, $what, at) VALUES (?,?,?) ON CONFLICT(external_id) DO UPDATE SET $what = excluded.$what")
+            ->execute([$externalId, $value, ($this->now)()]);
+    }
+
+    /**
+     * The Atlas side of a saved call: a person note (when there is a note) and a task (when there is a call-back date), on the ONE Atlas
+     * person matching the lead (email first, then LinkedIn URL; read-only lookups). No match or several: nothing in Atlas. ATLAS_WRITES=off
+     * (or lemlist preview mode): nothing is written, the lines say what would happen. Each write is sent once per save (call_sync).
+     * @return list<array{dest:string, ok:?bool, text:string}>
+     */
+    private function atlasSide(array $ctx, bool $preview): array
+    {
+        $wantNote = $ctx['note'] !== '';
+        $wantTask = $ctx['callback'] !== '';
+        if (!$wantNote && !$wantTask) return [];
+        if (!$this->atlas) return [['dest' => 'atlas', 'ok' => null, 'text' => 'Atlas: not connected (saved in lemlist only)']];
+        if (!Atlas::writesOn($this->config)) return [['dest' => 'atlas', 'ok' => null, 'text' => 'Atlas: not sent (ATLAS_WRITES is off in config.php)']];
+        $only = $wantNote ? 'Not found in Atlas (note saved in lemlist only)' : 'Not found in Atlas (saved in lemlist only)';
+        try {
+            $match = $this->atlasPerson($ctx['lead']);
+        } catch (\Throwable $e) {
+            return [['dest' => 'atlas', 'ok' => false, 'text' => 'Atlas lookup failed: ' . $e->getMessage()]];
+        }
+        if (count($match) !== 1) return [['dest' => 'atlas', 'ok' => null, 'text' => $only . (count($match) > 1 ? ' (' . count($match) . ' people match)' : '')]];
+        $personId = $match[0];
+        $out = [];
+        $loginEmail = strtolower($this->user);
+        try {
+            $owner = $this->atlas->get('/api/v1/users', ['email' => $loginEmail, 'page' => 1, 'pageSize' => 1])['data'][0]['id'] ?? null;
+        } catch (\Throwable $e) {
+            return [['dest' => 'atlas', 'ok' => false, 'text' => 'Atlas: could not read your Atlas user (' . $e->getMessage() . ')']];
+        }
+        if (!is_string($owner) || !AtlasGuard::isUuid($owner)) {
+            return [['dest' => 'atlas', 'ok' => false, 'text' => "Atlas: no Atlas user with your login email ($loginEmail), so nothing was added there"]];
+        }
+        if ($wantNote) {
+            $when = (new \DateTimeImmutable('@' . ($this->now)()))->setTimezone(new \DateTimeZone($this->tz))->format('Y-m-d H:i');
+            $text = 'Call ' . $when . ' · ' . ($ctx['answered'] ? 'Answered' : 'Not answered') . ' · ' . $ctx['outcome'] . ($ctx['campaign'] !== '' ? ' · ' . $ctx['campaign'] : '') . "\n" . $ctx['note'];
+            $body = ['personId' => $personId, 'note' => $text, 'ownerEmail' => $loginEmail];
+            AtlasGuard::assertWrite('PUT', '/api/v1/people/notes', $body);
+            if ($preview) $out[] = ['dest' => 'atlasNote', 'ok' => null, 'text' => 'Atlas note: would be added (preview)'];
+            elseif ($this->synced($ctx['externalId'], 'atlas_note')) $out[] = ['dest' => 'atlasNote', 'ok' => true, 'text' => 'Atlas note ✓ (already added)'];
+            else {
+                try {
+                    $r = $this->atlas->write('PUT', '/api/v1/people/notes', $body);
+                    $this->markSynced($ctx['externalId'], 'atlas_note', (string) ($r['data']['id'] ?? 'added'));
+                    $out[] = ['dest' => 'atlasNote', 'ok' => true, 'text' => 'Atlas note ✓'];
+                } catch (\Throwable $e) {
+                    $out[] = ['dest' => 'atlasNote', 'ok' => false, 'text' => 'Atlas note: ' . $e->getMessage()];
+                }
+            }
+        }
+        if ($wantTask) {
+            $who = $ctx['name'] !== '' ? $ctx['name'] : 'lead';
+            $body = ['content' => 'Call back ' . $who . ($ctx['company'] !== '' ? ' (' . $ctx['company'] . ')' : '') . ($ctx['note'] !== '' ? "\n" . $ctx['note'] : ''),
+                'dueDate' => $ctx['callback'], 'ownerId' => $owner, 'personId' => $personId];
+            AtlasGuard::assertWrite('POST', '/api/v1/tasks', $body);
+            if ($preview) $out[] = ['dest' => 'atlasTask', 'ok' => null, 'text' => 'Atlas task: would be added for ' . $ctx['callback'] . ' (preview)'];
+            elseif ($this->synced($ctx['externalId'], 'atlas_task')) $out[] = ['dest' => 'atlasTask', 'ok' => true, 'text' => 'Atlas task ✓ (already added)'];
+            else {
+                try {
+                    $r = $this->atlas->write('POST', '/api/v1/tasks', $body);
+                    $this->markSynced($ctx['externalId'], 'atlas_task', (string) ($r['data']['id'] ?? 'added'));
+                    $out[] = ['dest' => 'atlasTask', 'ok' => true, 'text' => 'Atlas task ✓ (due ' . $ctx['callback'] . ')'];
+                } catch (\Throwable $e) {
+                    $out[] = ['dest' => 'atlasTask', 'ok' => false, 'text' => 'Atlas task: ' . $e->getMessage()];
+                }
+            }
+        }
+        if (!$preview) $this->audit('atlas_call_sync', ['externalId' => $ctx['externalId'], 'note' => $wantNote ? 'yes' : 'no', 'task' => $wantTask ? 'yes' : 'no'], 'done');
+        return $out;
+    }
+
+    /** The Atlas person ids matching a lead: by email first, then by LinkedIn URL (read-only GET /people/search). */
+    private function atlasPerson(?array $lead): array
+    {
+        if (!$lead) return [];
+        $ids = function (array $r): array {
+            $out = [];
+            foreach ($r['data'] ?? [] as $p) if (is_array($p) && AtlasGuard::isUuid((string) ($p['id'] ?? ''))) $out[(string) $p['id']] = true;
+            return array_keys($out);
+        };
+        $email = trim((string) ($lead['email'] ?? ''));
+        if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            try {
+                $found = $ids($this->atlas->get('/api/v1/people/search', ['emails' => $email]));
+            } catch (NotFoundError) {
+                $found = [];
+            }
+            if ($found) return $found;
+        }
+        $li = trim((string) ($lead['linkedin'] ?? ''));
+        if ($li !== '' && preg_match('~linkedin\.com/~i', $li)) {
+            try {
+                return $ids($this->atlas->get('/api/v1/people/search', ['linkedinUrls' => $li]));
+            } catch (NotFoundError) {
+                return [];
+            }
+        }
+        return [];
     }
 
     /** POST /calls; a racing duplicate (409 LOG_IN_PROGRESS) is retried once after a second (same externalId = never twice). */

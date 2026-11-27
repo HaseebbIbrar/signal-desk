@@ -25,7 +25,7 @@ test('lemlist storage: rollback journal (DELETE), synchronous NORMAL, busy_timeo
     $dir = tmpdir();
     $s = new LemlistStore("$dir/lemlist.sqlite");
     eq(['delete', 'delete', 1, 15000], [$s->one('PRAGMA main.journal_mode'), $s->one('PRAGMA app.journal_mode'), (int) $s->one('PRAGMA main.synchronous'), (int) $s->one('PRAGMA busy_timeout')]);
-    eq(['calls', 'outcomes'], array_column($s->all("SELECT name FROM app.sqlite_master WHERE type = 'table' ORDER BY name"), 'name'));
+    eq(['call_sync', 'calls', 'outcomes'], array_column($s->all("SELECT name FROM app.sqlite_master WHERE type = 'table' ORDER BY name"), 'name'));
     eq(0, (int) $s->one("SELECT COUNT(*) FROM main.sqlite_master WHERE name IN ('calls','outcomes')"), 'not in the re-syncable database');
     $s->db->prepare('INSERT INTO outcomes (lead_id, outcome, by_user, at) VALUES (?,?,?,?)')->execute(['lea_1', 'Meeting', 'jp', 1]);
     eq('Meeting', $s->one('SELECT outcome FROM app.outcomes'), 'unqualified names reach the app file');

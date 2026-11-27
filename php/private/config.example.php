@@ -41,6 +41,10 @@ return [
     'ATLAS_API_KEY' => '',
     'ATLAS_BASE_URL' => 'https://api.recruitwithatlas.com',
     'ATLAS_PROFILE_URL' => 'https://my.recruitwithatlas.com/people-v2?profile={id}',
+    // Calls panel -> Atlas kill switch. 'off' (default): Atlas stays read-only. 'on': saving a call also adds a person note
+    // (when you wrote a note) and a task (when you picked a call-back date) in Atlas - nothing else is ever written there.
+    // The API key then needs read-write scope (Atlas: Settings -> Developers -> API keys).
+    'ATLAS_WRITES' => 'off',
 
     // Optional AI scoring for JD matching (Anthropic API). OFF by default: JD matching is rule-based and free.
     // To switch it on later: 'anthropic' plus a key from console.anthropic.com. 'mock' = fake AI (refused in production).

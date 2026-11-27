@@ -374,8 +374,10 @@ final class App
     private function calls(string $user): CallDesk
     {
         if (Lemlist::mode($this->config) === 'off') throw new AppError(503, 'LEMLIST_OFF', 'lemlist is not configured (LEMLIST_API_KEY in config.php).');
-        return new CallDesk(Lemlist::store($this->config), Lemlist::client($this->config), $this->config, $user,
+        $desk = new CallDesk(Lemlist::store($this->config), Lemlist::client($this->config), $this->config, $user,
             new CallDeskLimiter($this->config['STORAGE_DIR'] . '/lemlist-limits.json'), $this->config['TIMEZONE']);
+        $desk->atlas = Atlas::client($this->config, $this->config['PRIVATE_DIR'] ?? null); // the call panel's note + call-back task (ATLAS_WRITES)
+        return $desk;
     }
 
     private function selections(): OutreachSelections

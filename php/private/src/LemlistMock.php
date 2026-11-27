@@ -280,6 +280,7 @@ final class MockLemlist
             if ($i === null) return $err(404, 'NOT_FOUND', 'Task not found');
             if (!empty($b['done'])) $this->tasks[$i]['status'] = 'done';
             if (isset($b['dueDate'])) { $this->tasks[$i]['dueDate'] = $b['dueDate']; $this->tasks[$i]['status'] = 'upcoming'; }
+            if (isset($b['message'])) $this->tasks[$i]['message'] = (string) $b['message'];
             return $ok(['_id' => $this->tasks[$i]['_id'], 'type' => $this->tasks[$i]['type'], 'dueDate' => $this->tasks[$i]['dueDate']]);
         }
         if ($method === 'POST' && $path === '/tasks/ignore') {

@@ -152,7 +152,9 @@ Old links keep working with a permanent redirect (301), query included: `/signal
 
 The Inbox badge is counted from lemlist at most every 2 minutes (and at once after a reply webhook), cached in `storage/inbox-unread.json` (a number only), so the top bar never waits for lemlist.
 
-## Candidate Desk (Atlas, read-only)
+## Candidate Desk (Atlas)
+
+Atlas is read-only for Signal Desk, with ONE exception since 27 Nov 2026: the Calls panel can add a **person note** and a **task** (below, "Calls panel -> Atlas"), only with `ATLAS_WRITES` = `on`.
 
 The **Candidates** page and the **Atlas** badges on Signals and Verified cards use your **6 Atlas candidate pools**. Each pool is one list with no Permanent/Freelance split:
 
@@ -508,6 +510,21 @@ With `'off'` the whole tab works in **preview mode**: every button runs all the 
 **Dashboard numbers:** calls logged here count as calls and conversations; a positive call sets the lead to Interested (negative: Not interested); the Interested / Meeting / Not interested labels set the same outcomes.
 
 **Calls API:** logging calls needs lemlist **Email Pro or above**. Without it the tab says so, and manual tasks and the inbox keep working.
+
+## Calls panel -> Atlas (note + call-back task)
+
+When you save a call in the Calls tab:
+
+| You filled in | lemlist | Atlas (`ATLAS_WRITES` = `on`) |
+|---|---|---|
+| a note | the note on the call (`POST /calls`) | a person note: "Call {date time} · Answered/Not answered · {outcome} · {campaign}" + the note (`PUT /api/v1/people/notes`) |
+| a call-back date | the call is logged on the lead WITHOUT completing the task; the same call task moves to that day at 09:00, stays open and gets your note (`PATCH /tasks {id, dueDate, message}`), so the lead waits on that call and the sequence does not move on | a task "Call back {name} ({company})" + the note, due that day, assigned to your Atlas user (found by your login email), linked to the person (`POST /api/v1/tasks`) |
+
+- **Which Atlas person:** looked up read-only by the lead's email, then by its LinkedIn URL (`GET /api/v1/people/search`). Exactly one match: the note/task go there. None or several: lemlist only, and the panel says "Not found in Atlas (note saved in lemlist only)". Signal Desk never creates people in Atlas.
+- **After saving**, one line per destination under the button: lemlist ✓ / Atlas note ✓ / Atlas task ✓, or the error. A failure on one side never blocks or undoes the other; **Save again** sends nothing twice (each save attempt remembers what it already did).
+- **Kill switches:** `LEMLIST_WRITES` = `off` = preview of everything (nothing sent anywhere, Atlas included). `ATLAS_WRITES` = `off` (default) = Atlas stays read-only.
+- **The Atlas API key needs read-write scope** for this (Atlas: Settings -> Developers -> API keys). A read-only key is not worked around: the first save shows "Atlas refused the write ... cannot write".
+- Only these two Atlas writes exist in the code (`AtlasGuard`); any other Atlas write (edits, deletes, lists, stages, new people) is refused before a request is made.
 
 ## What the app writes
 

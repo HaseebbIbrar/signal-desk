@@ -202,7 +202,7 @@ test('Atlas health: reachable + 6 pools found (mock); off when no key', function
     eq('atlas', Atlas::mode(['ATLAS_API_KEY' => 'k']));
     $mockCfg = ['ATLAS_BACKEND' => 'mock', 'ATLAS_API_KEY' => '', 'STORAGE_DIR' => tmpdir()];
     $h = Health::atlasChecks($mockCfg, __DIR__ . '/../private');
-    eq(['Atlas (Candidate Desk)', 'Atlas list map', 'Atlas API reachable', 'Atlas pools found', 'Atlas title index'], array_column($h, 0));
+    eq(['Atlas (Candidate Desk)', 'Atlas list map', 'Atlas API reachable', 'Atlas pools found', 'Atlas title index', 'Atlas writes (call panel)'], array_column($h, 0));
     eq(['Atlas title index' => 'WARN'], array_filter(array_column($h, 1, 0), fn ($s) => $s !== 'OK'), 'only the (not yet built) index warns');
 });
 

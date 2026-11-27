@@ -168,8 +168,10 @@ test('calls: manual call task = POST /calls {leadId} then PATCH /tasks {id, done
         return $orig($m, $u, $h, $b);
     };
     $in = ['taskId' => 'opp_man00001', 'attempt' => t_attempt('m'), 'answered' => false, 'status' => 'left-voicemail', 'note' => ''];
-    $e = throws(fn () => $d->logCall($in), AppError::class, 'the call will not be logged twice');
-    ok(str_contains($e->getMessage(), 'The call is logged in lemlist'));
+    $r = $d->logCall($in);
+    eq(false, $r['ok']);
+    ok(str_contains($r['message'], 'The call is logged in lemlist, but completing the task failed') && str_contains($r['message'], 'Save again'), $r['message']);
+    eq(['lemlist', false], [$r['results'][0]['dest'], $r['results'][0]['ok']], 'one line per destination');
     eq('due', $store->one("SELECT status FROM tasks WHERE id = 'opp_man00001'"), 'still open until the task update succeeds');
     $r = $d->logCall($in); // Save again
     eq(true, $r['ok']);
@@ -183,19 +185,28 @@ test('calls: manual call task = POST /calls {leadId} then PATCH /tasks {id, done
     eq('closed', $store->one("SELECT status FROM tasks WHERE id = 'opp_man00001'"));
 });
 
-test('calls: call-back = POST /calls {leadId} without taskId + PATCH /tasks {id, dueDate}; the task stays open', function () {
+test('calls: call-back = POST /calls {leadId} (not completing the task) + PATCH /tasks {id, dueDate, message}: the same task moves to the date, stays open and gets the note; no new task', function () {
     [$d, $store, $mock] = t_desk();
     $d->view();
     $from = count($mock->calls);
-    $r = $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt('cb'), 'answered' => true, 'status' => 'busy', 'callbackDate' => '2026-11-16']);
+    $tasks = count($mock->tasks);
+    $r = $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt('cb'), 'answered' => true, 'status' => 'busy', 'note' => 'In a meeting, call Monday', 'callbackDate' => '2026-11-16']);
     eq(true, $r['ok']);
-    ok(str_contains($r['message'], '2026-11-16'));
+    ok(str_contains($r['message'], '2026-11-16') && str_contains($r['message'], 'stays open'));
     $w = t_lem_writes($mock, $from);
     eq(['POST', '/calls'], [$w[0][0], $w[0][1]]);
-    ok(!isset($w[0][2]['taskId']) && $w[0][2]['leadId'] === 'lea_it01', 'logged on the lead, task not completed');
-    eq(['PATCH', '/tasks', ['id' => 'opp_call0001', 'dueDate' => '2026-11-16T08:00:00.000Z']], $w[1], '09:00 Brussels');
-    eq('upcoming', $mock->tasks[0]['status']);
+    ok(!isset($w[0][2]['taskId']) && $w[0][2]['leadId'] === 'lea_it01', 'logged on the lead: the phone task is NOT completed');
+    eq(['PATCH', '/tasks', ['id' => 'opp_call0001', 'dueDate' => '2026-11-16T08:00:00.000Z', 'message' => 'In a meeting, call Monday']], $w[1], '09:00 Brussels, with the note');
+    eq(2, count($w), 'nothing else: no new task, no done');
+    eq([$tasks, 'upcoming', 'In a meeting, call Monday'], [count($mock->tasks), $mock->tasks[0]['status'], $mock->tasks[0]['message']], 'the same task, still open, with the note');
     eq('upcoming', $store->one("SELECT status FROM tasks WHERE id = 'opp_call0001'"));
+    eq('2026-11-16T08:00:00.000Z', $store->one("SELECT due_date FROM tasks WHERE id = 'opp_call0001'"));
+    eq('lemlist ✓ call logged with your note, task moved to 2026-11-16 with your note (still open)', $r['results'][0]['text']);
+    // a manual call task the same way (not done), and without a note: only the date moves
+    $from = count($mock->calls);
+    $d->logCall(['taskId' => 'opp_man00001', 'attempt' => t_attempt('cbm'), 'answered' => false, 'status' => 'left-voicemail', 'note' => '', 'callbackDate' => '2026-11-17']);
+    eq(['PATCH', '/tasks', ['id' => 'opp_man00001', 'dueDate' => '2026-11-17T08:00:00.000Z']], t_lem_writes($mock, $from)[1]);
+    eq('upcoming', $store->one("SELECT status FROM tasks WHERE id = 'opp_man00001'"));
     foreach (['2026-11-12', '2026-11-11', '2028-01-01', 'next monday'] as $bad) {
         throws(fn () => $d->logCall(['taskId' => 'opp_call0002', 'attempt' => t_attempt($bad), 'answered' => true, 'status' => 'busy', 'callbackDate' => $bad]), ValidationError::class, 'call-back date');
     }

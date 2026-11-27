@@ -14,7 +14,7 @@ final class Config
         'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
         'GRAPH_DRIVE_ID', 'GRAPH_MASTER_ITEM_ID', 'GRAPH_DEV_ITEM_ID',
         'AUTH_USERS', 'STORAGE_DIR',
-        'ATLAS_BACKEND', 'ATLAS_API_KEY', 'ATLAS_BASE_URL', 'ATLAS_PROFILE_URL',
+        'ATLAS_BACKEND', 'ATLAS_API_KEY', 'ATLAS_BASE_URL', 'ATLAS_PROFILE_URL', 'ATLAS_WRITES',
         'ANTHROPIC_BACKEND', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_MONTHLY_LIMIT_EUR', 'ANTHROPIC_USD_TO_EUR',
         'PROSPEO_BACKEND', 'PROSPEO_API_KEY', 'PROSPEO_DAILY_CREDIT_CAP',
         'LEMLIST_BACKEND', 'LEMLIST_API_KEY', 'LEMLIST_WEBHOOK_SECRET', 'LEMLIST_USER_MAP', 'LEMLIST_SHARED_SENDER', 'LEMLIST_SENDER_ALLOWED', 'LEMLIST_ATTRIBUTION', 'LEMLIST_SHOW_STOPPED', 'LEMLIST_WRITES',
@@ -92,6 +92,9 @@ final class Config
         if (!in_array($c['LEMLIST_ATTRIBUTION'], ['', 'first_positive', 'all_touches'], true)) throw new ConfigError('LEMLIST_ATTRIBUTION must be first_positive or all_touches.');
         if ($c['LEMLIST_ATTRIBUTION'] === '') $c['LEMLIST_ATTRIBUTION'] = 'first_positive';
         // Calls tab kill switch: off (default) = preview mode, nothing is sent to lemlist
+        $aw = strtolower(trim((string) ($c['ATLAS_WRITES'] ?? '')));
+        if (!in_array($aw, ['', 'on', 'off'], true)) throw new ConfigError('ATLAS_WRITES must be on or off.');
+        $c['ATLAS_WRITES'] = $aw === 'on' ? 'on' : 'off';
         $w = strtolower(trim((string) ($c['LEMLIST_WRITES'] ?? '')));
         if (!in_array($w, ['', 'on', 'off'], true)) throw new ConfigError('LEMLIST_WRITES must be on or off.');
         $c['LEMLIST_WRITES'] = $w === 'on' ? 'on' : 'off';

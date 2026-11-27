@@ -1,7 +1,9 @@
 <?php
 // Candidate Desk: Atlas (recruitwithatlas.com) candidate lists, READ-ONLY.
 //
-//   AtlasGuard        GET-only allowlist: any other method or endpoint is refused before a request is made.
+//   AtlasGuard        GET allowlist + exactly TWO writes (approved 2026-11-27, behind ATLAS_WRITES, default off):
+//                       PUT /api/v1/people/notes {personId, note, ownerEmail} · POST /api/v1/tasks {content, dueDate, ownerId, personId}.
+//                       Anything else (edits, deletes, lists, stages, new people) is refused before a request is made.
 //   AtlasClient       curl, Bearer key, timeouts, 429 handling (retryAfterSec / RateLimit-Reset / Retry-After),
 //                     audit log of method + endpoint pattern + status only (no ids, no personal data).
 //   ListMap           storage/atlas-list-map.json (editable): Role Sub-Group / title keywords / Role Group -> list family.
@@ -20,7 +22,7 @@ final class AtlasRateLimited extends AppError
     }
 }
 
-/** Read-only allowlist for the Atlas API. Mirrors Guard.php: refuse first, never "try and see". */
+/** Atlas allowlist: GET endpoints plus the two writes of the call panel. Mirrors Guard.php: refuse first, never "try and see". */
 final class AtlasGuard
 {
     private const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
@@ -50,6 +52,37 @@ final class AtlasGuard
             if (preg_match($re, $path)) return $label;
         }
         throw new ForbiddenWriteError('Refused: this Atlas endpoint is not on the read-only allowlist');
+    }
+
+    /** "METHOD path" => regex. The ONLY writes the app can ever send to Atlas. */
+    private const WRITES = [
+        'PUT /api/v1/people/notes' => '#^/api/v1/people/notes$#',
+        'POST /api/v1/tasks' => '#^/api/v1/tasks$#',
+    ];
+
+    /** A write: one of the two allowed endpoints, with exactly the allowed body. @return string the endpoint label (for logs) */
+    public static function assertWrite(string $method, string $path, array $body): string
+    {
+        $op = strtoupper($method) . ' ' . $path;
+        if (!isset(self::WRITES[$op]) || !preg_match(self::WRITES[$op], $path)) {
+            throw new ForbiddenWriteError("Refused: Signal Desk never sends $op to Atlas (only a person note and a task)");
+        }
+        $keys = array_keys($body);
+        sort($keys);
+        $text = fn ($v, int $max) => is_string($v) && trim($v) !== '' && mb_strlen($v) <= $max;
+        if ($op === 'PUT /api/v1/people/notes') {
+            // a note on ONE known person (by id, never by email: no guessing), written as a known Atlas user
+            if ($keys !== ['note', 'ownerEmail', 'personId'] || !self::isUuid((string) $body['personId']) || !$text($body['note'], 16384)
+                || !filter_var($body['ownerEmail'], FILTER_VALIDATE_EMAIL)) {
+                throw new ForbiddenWriteError('Refused: an Atlas note is {personId, note, ownerEmail} only');
+            }
+        } else {
+            if ($keys !== ['content', 'dueDate', 'ownerId', 'personId'] || !self::isUuid((string) $body['personId']) || !self::isUuid((string) $body['ownerId'])
+                || !$text($body['content'], 16384) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $body['dueDate'])) {
+                throw new ForbiddenWriteError('Refused: an Atlas task is {content, dueDate (YYYY-MM-DD), ownerId, personId} only');
+            }
+        }
+        return $op;
     }
 
     public static function isUuid(string $s): bool
@@ -113,12 +146,38 @@ final class AtlasClient
         throw new UpstreamError('Atlas did not answer');
     }
 
-    private function curl(string $url, array $headers): array
+    /**
+     * One of the two allowed writes (AtlasGuard::assertWrite), sent ONCE: no retry, so a note or task is never created twice.
+     * Audit: method, endpoint and status only. 401/403 = the API key cannot write (read-only scope).
+     */
+    public function write(string $method, string $path, array $body): array
+    {
+        $op = AtlasGuard::assertWrite($method, $path, $body);
+        $url = rtrim($this->baseUrl, '/') . $path;
+        $headers = ['Authorization: Bearer ' . $this->apiKey, 'Accept: application/json', 'Content-Type: application/json'];
+        $json = (string) json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $t0 = microtime(true);
+        $res = $this->transport ? ($this->transport)($url, $headers, strtoupper($method), $json) : $this->curl($url, $headers, strtoupper($method), $json);
+        $s = $res['status'];
+        Audit::event('atlas_call', ['method' => strtoupper($method), 'endpoint' => $op, 'status' => $s, 'ms' => (int) round((microtime(true) - $t0) * 1000)]);
+        if ($s >= 200 && $s < 300) {
+            $data = json_decode($res['body'], true);
+            return is_array($data) ? $data : [];
+        }
+        if ($s === 401 || $s === 403) throw new AppError(403, 'ATLAS_READ_ONLY', 'Atlas refused the write (HTTP ' . $s . '): the API key in config.php cannot write. Give it read-write scope in Atlas (Settings → Developers → API keys).');
+        if ($s === 429) throw new AtlasRateLimited(60);
+        $msg = json_decode($res['body'], true);
+        $why = is_array($msg) ? (string) ($msg['error']['message'] ?? $msg['message'] ?? $msg['error'] ?? '') : '';
+        throw new UpstreamError('Atlas error ' . $s . ($why !== '' ? ': ' . mb_substr($why, 0, 160) : ''));
+    }
+
+    private function curl(string $url, array $headers, string $method = 'GET', ?string $body = null): array
     {
         $ch = curl_init($url);
         $respHeaders = [];
+        if ($method !== 'GET') curl_setopt_array($ch, [CURLOPT_CUSTOMREQUEST => $method, CURLOPT_POSTFIELDS => (string) $body]);
         curl_setopt_array($ch, [
-            CURLOPT_HTTPGET => true, // GET only, by construction
+            CURLOPT_HTTPGET => $method === 'GET', // GET unless it is one of the two guarded writes
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_TIMEOUT => 15,
@@ -1141,9 +1200,35 @@ final class MockAtlas
     }
 
     /** Transport for AtlasClient: fn(url, headers) -> [status, headers, body]. GET only (the client never sends anything else). */
-    public function __invoke(string $url, array $headers): array
+    /** Writes received (method, path, body) and test switches: a read-only key, or Atlas failing on writes. */
+    public array $writes = [];
+    public bool $readOnly = false;
+    public int $failWrites = 0;
+    public array $users = [];
+
+    /** Test helper: a person with an email and/or LinkedIn URL. */
+    public function addPerson(string $id, string $first, string $last, ?string $email, ?string $linkedin = null): void
+    {
+        $ids = [];
+        if ($email) $ids[] = ['type' => 'email', 'value' => $email, 'isPersonal' => false, 'isPrimary' => true];
+        if ($linkedin) $ids[] = ['type' => 'linkedin', 'value' => $linkedin, 'isPersonal' => false, 'isPrimary' => false];
+        $this->people[$id] = ['id' => $id, 'firstName' => $first, 'lastName' => $last, 'identities' => $ids, 'headline' => ['role' => '', 'company' => ''], 'hasCv' => false];
+    }
+
+    public function __invoke(string $url, array $headers, string $method = 'GET', ?string $body = null): array
     {
         $this->calls++;
+        if ($method !== 'GET') {
+            $u = parse_url($url);
+            $b = json_decode((string) $body, true) ?: [];
+            $this->writes[] = [$method, $u['path'] ?? '', $b];
+            if ($this->readOnly) return ['status' => 403, 'headers' => [], 'body' => '{"status":"error","error":"Forbidden: this API key is read only"}'];
+            if ($this->failWrites > 0) return ['status' => $this->failWrites, 'headers' => [], 'body' => '{"status":"error","error":"Something went wrong"}'];
+            $id = self::uuid('w-' . count($this->writes));
+            if (($u['path'] ?? '') === '/api/v1/people/notes') return ['status' => 201, 'headers' => [], 'body' => json_encode(['status' => 'success', 'data' => ['id' => $id, 'personId' => $b['personId'] ?? null, 'type' => 'manual']])];
+            if (($u['path'] ?? '') === '/api/v1/tasks') return ['status' => 201, 'headers' => [], 'body' => json_encode(['status' => 'success', 'data' => ['id' => $id, 'content' => $b['content'] ?? '', 'dueDate' => $b['dueDate'] ?? null]])];
+            return ['status' => 404, 'headers' => [], 'body' => '{"status":"error","error":"Not found"}'];
+        }
         $u = parse_url($url);
         $path = $u['path'] ?? '';
         parse_str($u['query'] ?? '', $q);
@@ -1171,6 +1256,17 @@ final class MockAtlas
                     'person' => ['id' => $pid, 'firstName' => $p['firstName'], 'lastName' => $p['lastName']]];
             }
             return $ok($paged($rows));
+        }
+        if ($path === '/api/v1/people/search' && isset($q['emails'])) {
+            $want = array_map('strtolower', array_filter(explode(',', (string) $q['emails'])));
+            $rows = [];
+            foreach ($this->people as $p) foreach ($p['identities'] as $idn) {
+                if ($idn['type'] === 'email' && in_array(strtolower($idn['value']), $want, true)) {
+                    $rows[] = ['id' => $p['id'], 'firstName' => $p['firstName'], 'lastName' => $p['lastName'], 'identities' => [['type' => 'email', 'value' => $idn['value'], 'active' => true]]];
+                }
+            }
+            $this->searches[] = 'emails:' . count($want);
+            return $ok(['status' => 'success', 'data' => $rows]);
         }
         if ($path === '/api/v1/people/search') {
             $want = array_filter(array_map(fn ($u) => preg_match('~linkedin\.com/in/([^/?#]+)~i', $u, $mm) ? strtolower($mm[1]) : null, explode(',', (string) ($q['linkedinUrls'] ?? ''))));
@@ -1200,7 +1296,11 @@ final class MockAtlas
         if (preg_match('~^/api/v1/files/([^/]+)/download$~', $path, $m)) {
             return $ok(['status' => 'success', 'data' => ['url' => 'https://files.example.test/cv/' . $m[1] . '.pdf?signature=mock', 'expires_at' => '2026-10-20T12:05:00Z']]);
         }
-        if ($path === '/api/v1/users') return $ok($paged([['id' => self::uuid('user-1'), 'name' => 'Mock User']]));
+        if ($path === '/api/v1/users') {
+            $users = $this->users ?: [['id' => self::uuid('user-1'), 'name' => 'Mock User', 'email' => 'mock.user@swooscale.example']];
+            if (isset($q['email'])) $users = array_values(array_filter($users, fn ($u) => strcasecmp((string) $u['email'], (string) $q['email']) === 0));
+            return $ok($paged($users));
+        }
         // business events for Outreach (fictional; companies match the mock lemlist leads)
         $recent = gmdate('Y-m-d\TH:i:s\Z', time() - 2 * 86400);
         if ($path === '/api/v1/projects') return $ok($paged([['id' => self::uuid('proj-1'), 'jobRole' => 'Security Architect', 'company' => ['id' => self::uuid('co-1'), 'name' => 'Example MSSP NV'], 'createdAt' => $recent],
@@ -1228,18 +1328,34 @@ final class Atlas
         return ($c['ATLAS_API_KEY'] ?? '') !== '' ? 'atlas' : 'off';
     }
 
+    /** The Atlas API client (the mock for ATLAS_BACKEND=mock), or null when Atlas is off. */
+    public static function client(array $c, ?string $privateDir = null): ?AtlasClient
+    {
+        $mode = self::mode($c);
+        if ($mode === 'off') return null;
+        $client = new AtlasClient($mode === 'mock' ? 'https://mock.atlas.test' : (($c['ATLAS_BASE_URL'] ?? '') ?: self::DEFAULT_BASE_URL), $mode === 'mock' ? 'mock' : (string) $c['ATLAS_API_KEY']);
+        if ($mode === 'mock') {
+            static $mock = null; // one fake Atlas per PHP request
+            $map = $privateDir ? (json_decode((string) @file_get_contents($privateDir . '/atlas-list-map.default.json'), true) ?: []) : [];
+            $mock ??= new MockAtlas($map);
+            $client->transport = $mock;
+        }
+        return $client;
+    }
+
+    /** Atlas writes (person note, task) happen only with ATLAS_WRITES=on. */
+    public static function writesOn(array $c): bool
+    {
+        return ($c['ATLAS_WRITES'] ?? 'off') === 'on' && self::mode($c) !== 'off';
+    }
+
     public static function source(array $c, string $privateDir): ?AtlasListsSource
     {
         $mode = self::mode($c);
         if ($mode === 'off') return null;
         $loaded = ListMap::load($c['STORAGE_DIR'], $privateDir . '/atlas-list-map.default.json');
         $storageMap = $c['STORAGE_DIR'] . '/atlas-list-map.json';
-        $client = new AtlasClient($mode === 'mock' ? 'https://mock.atlas.test' : (($c['ATLAS_BASE_URL'] ?? '') ?: self::DEFAULT_BASE_URL), $mode === 'mock' ? 'mock' : (string) $c['ATLAS_API_KEY']);
-        if ($mode === 'mock') {
-            static $mock = null; // one fake Atlas per PHP request
-            $mock ??= new MockAtlas(json_decode((string) @file_get_contents($privateDir . '/atlas-list-map.default.json'), true) ?: $loaded['map']);
-            $client->transport = $mock;
-        }
+        $client = self::client($c, $privateDir);
         return new AtlasListsSource($client, $loaded['map'], new TtlFileCache($c['STORAGE_DIR'] . '/atlas-cache', self::CACHE_TTL),
             ($c['ATLAS_PROFILE_URL'] ?? '') ?: self::DEFAULT_PROFILE_URL,
             $loaded['error'] === null && is_file($storageMap) ? $storageMap : null, $c['STORAGE_DIR'] . '/atlas-state.json', $c['STORAGE_DIR']);

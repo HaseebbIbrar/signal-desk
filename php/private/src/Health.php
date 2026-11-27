@@ -152,6 +152,9 @@ final class Health
         try {
             $source ??= Atlas::source($config, $privateDir);
             if ($source) $rows = array_merge($rows, $source->health());
+            $rows[] = ['Atlas writes (call panel)', 'OK', Atlas::writesOn($config)
+                ? 'on: saving a call adds a person note and a call-back task in Atlas (nothing else). The key needs read-write scope; a read-only key is reported on the first save.'
+                : 'off: Atlas stays read-only (set ATLAS_WRITES to on to send call notes and call-back tasks)'];
         } catch (\Throwable $e) {
             $rows[] = ['Atlas API reachable', 'FAIL', $e->getMessage()];
         }
