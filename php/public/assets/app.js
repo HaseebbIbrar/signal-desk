@@ -1310,13 +1310,16 @@
       var a1 = btn("Answered", st.ans === true, function () { st.ans = true; st.res = null; render(); }), a2 = btn("Not answered", st.ans === false, function () { st.ans = false; st.res = null; render(); });
       if (ro) { a1.disabled = true; a2.disabled = true; }
       box.appendChild(h("div", { class: "sd-o-wrap" }, a1, a2));
-      box.appendChild(h("span", { class: "sd-k-step", text: "2. Outcome" }));
       var opts = st.ans === null ? [] : (st.ans ? d.statuses.answered : d.statuses.notAnswered);
-      box.appendChild(h("div", { class: "sd-o-wrap" }, opts.map(function (o) {
-        var b = btn(o.label, st.res === o.key, function () { st.res = o.key; render(); });
-        b.title = [o.positive ? "marks the lead interested" : "", o.negative ? "marks the lead not interested" : "", o.pauses ? "pauses the campaign" : ""].filter(Boolean).join(", ");
-        return b;
-      })));
+      if (st.ans !== null) { // step 2 appears once step 1 is picked, with only that group's outcomes (changing step 1 clears it)
+        box.appendChild(h("span", { class: "sd-k-step", text: "2. Outcome" }));
+        box.appendChild(h("div", { class: "sd-o-wrap", role: "group", "aria-label": "Outcome" }, opts.map(function (o) {
+          var b = btn(o.label, st.res === o.key, function () { st.res = o.key; render(); });
+          b.title = [o.positive ? "marks the lead interested" : "", o.negative ? "marks the lead not interested" : "", o.pauses ? "pauses the campaign" : ""].filter(Boolean).join(", ");
+          if (ro) b.disabled = true;
+          return b;
+        })));
+      }
       box.appendChild(h("label", { for: "call-note", class: "sd-k-step", text: "3. Note (goes to lemlist)" }));
       var note = h("textarea", { id: "call-note", rows: "3", class: "sd-k-textarea", placeholder: "e.g. Hiring 2 SOC analysts in Q1, call back Monday", maxlength: "2000" });
       note.value = st.note;

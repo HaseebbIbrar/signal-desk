@@ -247,7 +247,7 @@ final class Outreach
         $calls = [];
         foreach ($this->store->all('SELECT * FROM calls') as $c) $calls[$c['lead_id']][] = $c + ['t' => (int) $c['created_at']];
         $statuses = [];
-        foreach ($this->store->all('SELECT * FROM call_statuses') as $s) $statuses[$s['key']] = ['answered' => (int) $s['answered'], 'positive' => (int) $s['positive'], 'negative' => (int) $s['negative'], 'label' => $s['label']];
+        foreach (CallOutcomes::all($this->store) as $k => $s) $statuses[$k] = ['answered' => $s['answered'], 'positive' => $s['positive'], 'negative' => $s['negative'], 'label' => $s['label']]; // grouping: CallOutcomes::MAP
         $outcomes = [];
         foreach ($this->store->all('SELECT * FROM outcomes') as $o) $outcomes[$o['lead_id']] = $o;
         $by = [];

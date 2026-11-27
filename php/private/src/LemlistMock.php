@@ -259,7 +259,7 @@ final class MockLemlist
             $ext = (string) ($b['externalId'] ?? '');
             if (isset($this->callLog[$ext])) return $ok(['success' => true, 'data' => $this->callLog[$ext]], 200); // replay: never twice
             if (($b['userId'] ?? '') !== self::USER) return $err(400, 'CALLS_API_USER_NOT_IN_TEAM', 'userId is not a member of the team');
-            $keys = ['connected-positive', 'connected-neutral', 'connected-negative', 'voicemail', 'gatekeeper', 'busy', 'no-answer', 'wrong-number', 'not-in-service'];
+            $keys = ['no-answer', 'left-voicemail', 'wrong-number', 'connected', 'connected-neutral', 'busy', 'gatekeeper', 'not-in-service', 'connected-negative', 'connected-positive']; // the live account's keys
             if (isset($b['callStatus']) && !in_array($b['callStatus'], $keys, true)) return $err(400, 'CALLS_UNKNOWN_CALL_STATUS', 'Unknown call status');
             $lead = $b['leadId'] ?? null;
             if (isset($b['taskId'])) {
@@ -382,10 +382,12 @@ final class MockLemlist
         }
         if ($method === 'GET' && $path === '/call-statuses') {
             if (!$this->callsApi) return $ok(['success' => false, 'error' => ['code' => 'PLAN', 'message' => 'The team plan does not include the calls API']], 402);
-            $s = fn ($k, $l, $a, $p = false, $n = false) => ['key' => $k, 'label' => $l, 'callAnswered' => $a, 'callPositive' => $p, 'callNegative' => $n, 'pausesCampaigns' => $p || $n];
-            return $ok(['success' => true, 'data' => [$s('connected-positive', 'Positive', true, true), $s('connected-neutral', 'Neutral', true), $s('connected-negative', 'Negative', true, false, true),
-                $s('voicemail', 'Left voicemail', true), $s('gatekeeper', 'Gatekeeper', true), $s('busy', 'Busy', true),
-                $s('no-answer', 'No answer', false), $s('wrong-number', 'Wrong number', false), $s('not-in-service', 'Not in service', false)]]);
+            $s = fn ($k, $l, $a, $p = false, $n = false) => ['key' => $k, 'label' => $l, 'callAnswered' => $a, 'callPositive' => $p, 'callNegative' => $n, 'pausesCampaigns' => $p];
+            // the live account's statuses (2026-11-27), with lemlist's own flags: it counts "Left voicemail" as answered
+            return $ok(['success' => true, 'data' => [$s('no-answer', 'No answer', false), $s('left-voicemail', 'Left voicemail', true), $s('wrong-number', 'Wrong number', false),
+                $s('connected', 'Connected', true), $s('connected-neutral', 'Connected neutral', true), $s('busy', 'Busy', true), $s('gatekeeper', 'Gatekeeper', false),
+                $s('not-in-service', 'Not in service', false), $s('connected-negative', 'Connected negative', true, false, true), ['key' => 'connected-positive', 'label' => 'Connected positive',
+                'callAnswered' => true, 'callPositive' => true, 'callNegative' => false, 'pausesCampaigns' => true]]]);
         }
         if ($method === 'GET' && $path === '/campaigns') {
             $all = $this->campaigns;

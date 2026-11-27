@@ -9,6 +9,7 @@ use SignalDesk\AppError;
 use SignalDesk\Auth;
 use SignalDesk\CallDesk;
 use SignalDesk\CallDeskLimiter;
+use SignalDesk\CallOutcomes;
 use SignalDesk\Config;
 use SignalDesk\HookBuffer;
 use SignalDesk\LemlistStore;
@@ -56,12 +57,49 @@ test('calls: live call statuses split by "did they answer?" (Connected positive 
     [$d, $store, $mock] = t_desk();
     $s = $d->statuses(true);
     eq(true, $s['callsApi']);
-    eq(['connected-positive', 'connected-neutral', 'connected-negative', 'voicemail', 'gatekeeper', 'busy'], array_column($s['answered'], 'key'), 'step 2 after "Answered"');
-    eq(['no-answer', 'wrong-number', 'not-in-service'], array_column($s['notAnswered'], 'key'), 'step 2 after "Not answered"');
-    eq([true, false], [$s['answered'][0]['positive'], $s['answered'][0]['negative']]);
-    eq(true, $s['answered'][0]['pauses']);
-    eq(true, $s['answered'][2]['negative']);
+    eq(['busy', 'connected-neutral', 'connected-positive', 'connected-negative'], array_column($s['answered'], 'key'), 'step 2 after "Answered"');
+    eq(['Busy', 'Connected neutral', 'Connected positive', 'Connected negative'], array_column($s['answered'], 'label'));
+    eq(['left-voicemail', 'wrong-number', 'not-in-service'], array_column($s['notAnswered'], 'key'), 'step 2 after "Not answered": Left voicemail is NOT answered (lemlist says answered)');
+    eq(['Left voicemail', 'Wrong number', 'Not in service'], array_column($s['notAnswered'], 'label'));
+    eq([true, false, true], [$s['answered'][2]['positive'], $s['answered'][2]['negative'], $s['answered'][2]['pauses']]);
+    eq(true, $s['answered'][3]['negative']);
+    $keys = array_merge(array_column($s['answered'], 'key'), array_column($s['notAnswered'], 'key'));
+    foreach (['connected', 'no-answer', 'gatekeeper'] as $hidden) ok(!in_array($hidden, $keys, true), "$hidden is not offered");
     ok(in_array(['GET', '/call-statuses'], array_map(fn ($c) => [$c[0], $c[1]], $mock->calls), true), 'read live from lemlist');
+});
+
+test('call outcomes: one map (CallOutcomes) groups every count, not lemlist\'s callAnswered flag: Left voicemail is not answered, also for calls logged before', function () {
+    [$d, $store, $mock] = t_desk();
+    $d->statuses(true);
+    eq('1', (string) $store->one("SELECT answered FROM call_statuses WHERE key = 'left-voicemail'"), 'lemlist itself flags Left voicemail as answered');
+    $o = new Outreach($store, ['LEMLIST_ATTRIBUTION' => 'first_positive']);
+    $before = $o->metrics(['cam_it000001', 'cam_hr000001'], 0, 2_000_000_000)['channels']['call'];
+    $all = CallOutcomes::all($store);
+    eq([0, 1, 1, 0, 0, 0], [$all['left-voicemail']['answered'], $all['busy']['answered'], $all['connected']['answered'], $all['no-answer']['answered'], $all['gatekeeper']['answered'], $all['wrong-number']['answered']]);
+    eq([1, 0, 0, 1], [$all['connected-positive']['positive'], $all['connected-positive']['negative'], $all['connected-negative']['positive'], $all['connected-negative']['negative']]);
+    // only the 7 offered keys can be saved, each in its own group; nothing new is created in lemlist
+    throws(fn () => $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt('g'), 'answered' => false, 'status' => 'gatekeeper']), ValidationError::class, 'Pick an outcome');
+    throws(fn () => $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt('c'), 'answered' => true, 'status' => 'connected']), ValidationError::class, 'Pick an outcome');
+    throws(fn () => $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt('v'), 'answered' => true, 'status' => 'left-voicemail']), ValidationError::class, 'does not match');
+    $from = count($mock->calls);
+    eq(true, $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt('vm'), 'answered' => false, 'status' => 'left-voicemail', 'note' => ''])['ok']);
+    eq(true, $d->logCall(['taskId' => 'opp_call0002', 'attempt' => t_attempt('cn'), 'answered' => true, 'status' => 'connected-neutral', 'note' => ''])['ok']);
+    $posts = array_values(array_filter(t_lem_writes($mock, $from), fn ($w) => $w[1] === '/calls'));
+    eq(['left-voicemail', 'connected-neutral'], array_column(array_column($posts, 2), 'callStatus'), 'saved with exactly these keys (the guarded POST /calls)');
+    ok(!array_filter(t_lem_writes($mock, $from), fn ($w) => str_contains($w[1], 'status')), 'no status created in lemlist');
+    eq(['done' => 2, 'answered' => 1, 'positive' => 0], $d->today(), 'today: the voicemail is not answered');
+    // a call logged before this change with lemlist's old flag is grouped by the map when counted
+    $store->db->prepare('INSERT INTO calls (external_id, lead_id, call_status, created_at, answered) VALUES (?,?,?,?,?)')->execute(['sd-old-vm', 'lea_hr02', 'left-voicemail', T_CALL_NOW - 3600, 1]);
+    eq(['done' => 3, 'answered' => 1, 'positive' => 0], $d->today());
+    $o = new Outreach($store, ['LEMLIST_ATTRIBUTION' => 'first_positive']);
+    $m = $o->metrics(['cam_it000001', 'cam_hr000001'], 0, 2_000_000_000);
+    eq([3, 1], [$m['channels']['call']['actions'] - $before['actions'], $m['channels']['call']['responses'] - $before['responses']],
+        'Dashboard: 3 more calls, 1 more conversation (Connected neutral); both voicemails are not answered');
+    $view = (fn () => $this->load(['cam_it000001', 'cam_hr000001']))->call($o)['byLead'];
+    eq('no answer', $view['lea_hr02']['channels']['call'], 'lead channel: the old voicemail is "no answer", not "answered"');
+    eq(['Call logged: Left voicemail'], array_values(array_filter(array_column($o->lead('lea_hr02')['timeline'], 'label'), fn ($l) => str_starts_with($l, 'Call logged'))), 'task history label from the map');
+    $js = (string) file_get_contents(__DIR__ . '/../public/assets/app.js');
+    ok(str_contains($js, 'if (st.ans !== null) { // step 2 appears once step 1 is picked'), 'step 2 hidden until step 1 is picked');
 });
 
 test('calls: queue = phone tasks + manual tasks titled Call / Calling again / Final call, overdue first; manual list with types and an approximate preview', function () {
@@ -110,7 +148,7 @@ test('calls: phone task = POST /calls {taskId} (lemlist completes it); the same 
     // a retry after a lost answer: lemlist already stored the call under this externalId -> 200 replay, nothing new
     $ext = 'sd-man00001-' . t_attempt('lost');
     $mock->callLog[$ext] = ['_id' => 'act_stored1', 'externalId' => $ext];
-    $r2 = $d->logCall(['taskId' => 'opp_man00001', 'attempt' => t_attempt('lost'), 'answered' => false, 'status' => 'no-answer']);
+    $r2 = $d->logCall(['taskId' => 'opp_man00001', 'attempt' => t_attempt('lost'), 'answered' => false, 'status' => 'left-voicemail']);
     eq(true, $r2['ok']);
     eq(2, count($mock->callLog), 'replayed, not logged twice');
     eq('act_stored1', $store->one('SELECT lemlist_id FROM calls WHERE external_id = ?', [$ext]));
@@ -129,7 +167,7 @@ test('calls: manual call task = POST /calls {leadId} then PATCH /tasks {id, done
         if ($m === 'PATCH' && $fail) { $fail = false; $orig->calls[] = [$m, '/tasks', [], json_decode((string) $b, true)]; return ['status' => 500, 'headers' => [], 'body' => '{"error":"boom"}']; }
         return $orig($m, $u, $h, $b);
     };
-    $in = ['taskId' => 'opp_man00001', 'attempt' => t_attempt('m'), 'answered' => true, 'status' => 'voicemail', 'note' => ''];
+    $in = ['taskId' => 'opp_man00001', 'attempt' => t_attempt('m'), 'answered' => false, 'status' => 'left-voicemail', 'note' => ''];
     $e = throws(fn () => $d->logCall($in), AppError::class, 'the call will not be logged twice');
     ok(str_contains($e->getMessage(), 'The call is logged in lemlist'));
     eq('due', $store->one("SELECT status FROM tasks WHERE id = 'opp_man00001'"), 'still open until the task update succeeds');
@@ -167,22 +205,22 @@ test('calls: 409 TASK_ALREADY_CLOSED refreshes the queue; 409 LOG_IN_PROGRESS is
     [$d, $store, $mock] = t_desk();
     $d->view();
     $mock->tasks[0]['status'] = 'done'; // someone completed it in lemlist meanwhile
-    $r = $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt('x'), 'answered' => false, 'status' => 'no-answer']);
+    $r = $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt('x'), 'answered' => false, 'status' => 'left-voicemail']);
     eq(false, $r['ok']);
     eq(true, $r['refreshed']);
     ok(str_contains($r['message'], 'already completed'));
     eq('closed', $store->one("SELECT status FROM tasks WHERE id = 'opp_call0001'"));
     $busy = ['status' => 409, 'headers' => [], 'body' => '{"success":false,"error":{"code":"CALLS_API_LOG_IN_PROGRESS","message":"in progress"}}'];
     $mock->queue = [$busy];
-    $r = $d->logCall(['taskId' => 'opp_call0002', 'attempt' => t_attempt('y'), 'answered' => false, 'status' => 'no-answer']);
+    $r = $d->logCall(['taskId' => 'opp_call0002', 'attempt' => t_attempt('y'), 'answered' => false, 'status' => 'left-voicemail']);
     eq(true, $r['ok'], 'one retry after a second');
     eq([1000], $GLOBALS['__deskSleeps']);
     $mock->queue = [$busy, $busy];
-    $r = $d->logCall(['taskId' => 'opp_call0003', 'attempt' => t_attempt('z'), 'answered' => false, 'status' => 'no-answer']);
+    $r = $d->logCall(['taskId' => 'opp_call0003', 'attempt' => t_attempt('z'), 'answered' => false, 'status' => 'left-voicemail']);
     eq(false, $r['ok']);
     eq(true, $r['retry']);
     ok(str_contains($r['message'], 'will not be logged twice'));
-    throws(fn () => $d->logCall(['taskId' => 'opp_call0003', 'attempt' => t_attempt('w'), 'answered' => true, 'status' => 'no-answer']), ValidationError::class, 'does not match');
+    throws(fn () => $d->logCall(['taskId' => 'opp_call0003', 'attempt' => t_attempt('w'), 'answered' => true, 'status' => 'left-voicemail']), ValidationError::class, 'does not match');
     throws(fn () => $d->logCall(['taskId' => 'opp_call0003', 'attempt' => t_attempt('v'), 'answered' => true, 'status' => 'made-up']), ValidationError::class, 'Pick an outcome');
     throws(fn () => $d->logCall(['taskId' => 'opp_lis00001', 'attempt' => t_attempt('u'), 'answered' => true, 'status' => 'busy']), ValidationError::class, 'not a call task');
 });
@@ -359,7 +397,7 @@ test('calls: users outside LEMLIST_SENDER_ALLOWED are view only', function () {
     ok(count($v['queue']) > 0, 'they still see the queue');
     $from = count($mock->calls);
     foreach ([
-        fn () => $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt(), 'answered' => false, 'status' => 'no-answer']),
+        fn () => $d->logCall(['taskId' => 'opp_call0001', 'attempt' => t_attempt(), 'answered' => false, 'status' => 'left-voicemail']),
         fn () => $d->taskAction(['taskId' => 'opp_vis00001', 'action' => 'skip']),
         fn () => $d->reply(['contactId' => 'ctc_it02', 'channel' => 'email', 'message' => 'x', 'confirm' => true]),
         fn () => $d->label(['contactId' => 'ctc_it02', 'label' => 'Interested']),

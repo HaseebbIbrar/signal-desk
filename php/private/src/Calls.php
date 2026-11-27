@@ -41,6 +41,60 @@ final class CallDeskLimiter
     }
 }
 
+/**
+ * The call outcomes Signal Desk offers (step 2 of "Now calling") and how EVERY count groups a call (today's numbers, the Dashboard,
+ * lead channels, task history). This map wins over lemlist's callAnswered / callPositive / callNegative flags: "Left voicemail" is
+ * not answered, even for calls logged before (counts are computed when read). Keys are lemlist's own; none is ever created.
+ */
+final class CallOutcomes
+{
+    /** key => [label, group (answered | not_answered), result (positive | negative | null), offered as a button] */
+    public const MAP = [
+        'busy' => ['Busy', 'answered', null, true],
+        'connected-neutral' => ['Connected neutral', 'answered', null, true],
+        'connected-positive' => ['Connected positive', 'answered', 'positive', true],
+        'connected-negative' => ['Connected negative', 'answered', 'negative', true],
+        'left-voicemail' => ['Left voicemail', 'not_answered', null, true],
+        'wrong-number' => ['Wrong number', 'not_answered', null, true],
+        'not-in-service' => ['Not in service', 'not_answered', null, true],
+        // not offered; only so that older calls with these statuses are counted in the right group
+        'connected' => ['Connected', 'answered', null, false],
+        'no-answer' => ['No answer', 'not_answered', null, false],
+        'gatekeeper' => ['Gatekeeper', 'not_answered', null, false],
+    ];
+
+    /**
+     * Every status for counting: key => {label, answered, positive, negative, pauses, inLemlist, offered}. The map wins;
+     * a lemlist status that is not in the map keeps lemlist's own flags.
+     */
+    public static function all(LemlistStore $store): array
+    {
+        $out = [];
+        foreach ($store->all('SELECT * FROM call_statuses ORDER BY position') as $r) {
+            $out[(string) $r['key']] = ['label' => (string) $r['label'], 'answered' => (int) $r['answered'], 'positive' => (int) $r['positive'], 'negative' => (int) $r['negative'],
+                'pauses' => (int) $r['pauses'], 'inLemlist' => true, 'offered' => false];
+        }
+        foreach (self::MAP as $key => [$label, $group, $result, $offered]) {
+            $out[$key] = ['label' => $label, 'answered' => (int) ($group === 'answered'), 'positive' => (int) ($result === 'positive'), 'negative' => (int) ($result === 'negative'),
+                'pauses' => (int) ($out[$key]['pauses'] ?? 0), 'inLemlist' => isset($out[$key]), 'offered' => $offered];
+        }
+        return $out;
+    }
+
+    /** Step 2 buttons per step-1 answer, in the map's order: only offered keys that exist in lemlist. */
+    public static function buttons(LemlistStore $store): array
+    {
+        $out = ['answered' => [], 'notAnswered' => []];
+        $all = self::all($store);
+        foreach (array_keys(self::MAP) as $key) {
+            $s = $all[$key];
+            if (!$s['offered'] || !$s['inLemlist']) continue;
+            $out[$s['answered'] ? 'answered' : 'notAnswered'][] = ['key' => $key, 'label' => $s['label'], 'positive' => (bool) $s['positive'], 'negative' => (bool) $s['negative'], 'pauses' => (bool) $s['pauses']];
+        }
+        return $out;
+    }
+}
+
 final class CallDesk
 {
     public const CALL_TITLE = '/^\s*(call|calling again|final call|voice\s*mail)/i';
@@ -319,11 +373,7 @@ final class CallDesk
             }
             $this->store->setMeta('statuses_at', $now);
         }
-        $rows = $this->store->all('SELECT * FROM call_statuses ORDER BY position');
-        $map = fn ($r) => ['key' => $r['key'], 'label' => $r['label'], 'positive' => (bool) $r['positive'], 'negative' => (bool) $r['negative'], 'pauses' => (bool) $r['pauses']];
-        return ['callsApi' => $this->store->meta('calls_api') !== 'no',
-            'answered' => array_values(array_map($map, array_filter($rows, fn ($r) => (int) $r['answered'] === 1))),
-            'notAnswered' => array_values(array_map($map, array_filter($rows, fn ($r) => (int) $r['answered'] === 0)))];
+        return ['callsApi' => $this->store->meta('calls_api') !== 'no'] + CallOutcomes::buttons($this->store); // step 2: only the outcomes of CallOutcomes::MAP
     }
 
     /** GET /call-statuses data -> call_statuses rows. */
@@ -382,8 +432,7 @@ final class CallDesk
     public function today(): array
     {
         $start = (new \DateTimeImmutable('@' . ($this->now)()))->setTimezone(new \DateTimeZone($this->tz))->setTime(0, 0)->getTimestamp();
-        $st = [];
-        foreach ($this->store->all('SELECT * FROM call_statuses') as $r) $st[$r['key']] = $r;
+        $st = CallOutcomes::all($this->store);
         $done = $answered = $positive = 0;
         foreach ($this->store->all('SELECT call_status FROM calls WHERE created_at >= ?', [$start]) as $c) {
             $done++;
@@ -416,8 +465,9 @@ final class CallDesk
         $kind = self::kind($task);
         if (!in_array($kind, ['phone', 'manualCall'], true)) throw new ValidationError('This task is not a call task.');
         if (!in_array($task['status'], self::OPEN, true)) return $this->closedAnswer($taskId, 'This task is already closed in lemlist. The queue was refreshed.');
-        $st = $this->store->all('SELECT * FROM call_statuses WHERE key = ?', [$statusKey])[0] ?? throw new ValidationError('Pick an outcome from the list.');
-        if ((bool) (int) $st['answered'] !== $answered) throw new ValidationError('That outcome does not match "' . ($answered ? 'Answered' : 'Not answered') . '".');
+        $st = CallOutcomes::all($this->store)[$statusKey] ?? null;
+        if (!$st || !$st['offered'] || !$st['inLemlist']) throw new ValidationError('Pick an outcome from the list.');
+        if ((bool) $st['answered'] !== $answered) throw new ValidationError('That outcome does not match "' . ($answered ? 'Answered' : 'Not answered') . '".');
         $due = null;
         if ($callback !== '') {
             $d = \DateTimeImmutable::createFromFormat('!Y-m-d', $callback, new \DateTimeZone($this->tz));

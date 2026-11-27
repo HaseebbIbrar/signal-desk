@@ -177,7 +177,7 @@ test('lemlist sync: team, call statuses, running campaigns only, steps incl. con
     eq(['opp_call0001', 'opp_call0002', 'opp_call0003', 'opp_eml00001', 'opp_fin00001', 'opp_lis00001', 'opp_man00001', 'opp_ooo00001', 'opp_vis00001', 'opp_vml00001'],
         array_column($store->all("SELECT id FROM tasks WHERE status IN ('due','upcoming','paused') ORDER BY id"), 'id'), 'open tasks only');
     eq('+32 470 00 ' . sprintf('%02d %02d', crc32('lea_it01') % 100, crc32(strrev('lea_it01')) % 100), $store->one("SELECT phone FROM leads WHERE lead_id = 'lea_it01'"), 'the lead phone from the export is kept');
-    eq(9, (int) $store->one('SELECT COUNT(*) FROM call_statuses'));
+    eq(10, (int) $store->one('SELECT COUNT(*) FROM call_statuses'), 'as many as the live account');
     eq(['yes', 'Email Pro'], [$store->meta('calls_api'), $store->meta('plan')]);
     eq(2, json_decode((string) $store->one("SELECT data FROM stats WHERE campaign_id = 'cam_it000001'"), true)['replied']);
     $before = count($mock->calls);
